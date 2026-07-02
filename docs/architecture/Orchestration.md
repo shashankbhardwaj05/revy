@@ -47,7 +47,8 @@ ticked is **not built**, regardless of what any earlier conversation may have im
 ### Repo / infra
 - ✅ pnpm workspace + Turborepo monorepo scaffolded
 - ✅ TypeScript strict mode base config shared across packages
-- ⬜ Docker Compose for local Postgres + Redis (currently Postgres is a bare Homebrew install — quality bar requires Compose)
+- ✅ Postgres hosted on Supabase (all environments incl. local dev) — migrated, verified end-to-end
+- ⬜ Docker Compose for local Redis (Postgres no longer needs this — Supabase covers it everywhere)
 - ⬜ Redis running/installed at all
 - ⬜ CI (no `.github/workflows`)
 - ⬜ Lint config (no ESLint/Prettier)
@@ -106,15 +107,15 @@ the data model to support playbooks/orgs/multi-tenancy at all.
 | Backend API | **NestJS + Fastify adapter** (already chosen) | Nest's module/DI system scales well once we add auth guards, org-scoped middleware, and a WebSocket gateway (`@nestjs/websockets` is first-class) — all things this project needs. Fastify adapter keeps raw HTTP throughput high for the webhook endpoint, which must ack fast. Picked over bare Express/Fastify because the segment engine, sync jobs, and multi-provider capture abstraction benefit from Nest's structured module boundaries more than they'd suffer from its ceremony. |
 | Realtime | Nest `@nestjs/websockets` gateway (Socket.IO adapter) | One gateway, rooms keyed by `meetingSessionId`; the extension and admin dashboard both subscribe to the same room. Reconnect/resync is a solved problem in Socket.IO — don't hand-roll raw WS reconnection logic. |
 | Queue | BullMQ + Redis | Webhook handlers must ack in <200ms and hand off; BullMQ gives retries, backoff, and dead-letter queues out of the box, which every async job here (transcript processing, segment detection, Airtable sync, HubSpot sync) needs for idempotency and observability. |
-| Database | PostgreSQL | Relational integrity matters here — meetings, sessions, transcripts, playbooks, segments, sync jobs are all foreign-keyed to each other; this is not a document-shaped problem. |
+| Database | PostgreSQL, hosted on **Supabase** (all environments, including local dev) | Relational integrity matters here — meetings, sessions, transcripts, playbooks, segments, sync jobs are all foreign-keyed to each other; this is not a document-shaped problem. Supabase was chosen over self-hosted/Neon because it bundles Postgres + Auth + S3-compatible Storage in one project, which is the actual "fewer moving parts" win — an Airtable-as-primary-DB alternative was considered and rejected: Airtable's 5 req/s rate limit, lack of transactions, and no jsonb support make it unworkable for the live transcript/segment-detection hot path (still used as the ops mirror per §11, exactly as originally planned). |
 | ORM | **Prisma** (already chosen) over Drizzle | This schema has ~20 entities with many relations and enums (§6). Prisma's declarative schema + `migrate dev`/`migrate deploy` workflow is a better fit for a schema that will churn quickly across V1–V3 than Drizzle's more SQL-adjacent, migration-by-hand style. Trade-off accepted: Prisma's runtime is heavier and query control is less granular — acceptable here since none of these tables are on a latency-critical hot path. |
 | Chrome extension | Manifest V3, TypeScript, React, content script + popup + background service worker | Required by Chrome policy (MV3 mandatory for new extensions). React only in the popup and the injected widget's shadow-DOM root, not the whole content script, to keep the injected bundle small. |
 | Web dashboard | Next.js | Already chosen; server components suit the admin/review surfaces (meeting detail, transcript viewer) that primarily read data. |
 | Internal ops mirror | Airtable API | Per vision — ops mirror, not source of truth. |
 | CRM sync | HubSpot API | Per vision. |
-| Object storage | S3-compatible (e.g., Cloudflare R2 or AWS S3) | For raw provider payload dumps, long transcript exports, debug artifacts — keeps Postgres row sizes sane. |
-| Auth | Google OAuth first, email/password as fallback | Sales orgs already live in Google Workspace; OAuth also gives us the participant email needed for HubSpot contact matching for free. Design allows org/team workspaces from the first migration (`organizations` table exists even if only one org is seeded initially). |
-| Deployment | Render (or Railway/Fly — pick one at deploy time) for api/worker/web; managed Postgres + Redis | Small team, no need for k8s yet; Render/Railway give you Postgres+Redis+background workers with minimal ops overhead. Revisit if/when scale demands it. |
+| Object storage | Supabase Storage (S3-compatible) | For raw provider payload dumps, long transcript exports, debug artifacts — keeps Postgres row sizes sane. Same Supabase project as the database, no separate bucket/provider to manage. |
+| Auth | Google OAuth via Supabase Auth first, email/password as fallback | Sales orgs already live in Google Workspace; OAuth also gives us the participant email needed for HubSpot contact matching for free. Supabase Auth avoids standing up a separate auth provider. Design allows org/team workspaces from the first migration (`organizations` table exists even if only one org is seeded initially). |
+| Deployment | Render (or Railway/Fly — pick one at deploy time) for api/worker/web; Supabase Postgres; Redis add-on | Small team, no need for k8s yet; Supabase covers the database identically across local/staging/prod, Render/Railway covers compute + Redis with minimal ops overhead. Revisit if/when scale demands it. |
 
 ---
 
@@ -434,9 +435,10 @@ vision brief ("Postgres should remain source of truth").
 
 ## 14. Local Development Setup
 
-- `docker-compose.yml` at repo root: Postgres 16 + Redis 7, replacing the current ad hoc
-  Homebrew install so onboarding a second machine/person doesn't require manual `brew
-  install` + `createdb` steps.
+- Postgres: a Supabase project, shared across local/staging/prod — no local install. Get
+  the pooled (`DATABASE_URL`) and direct (`DIRECT_URL`) connection strings from
+  **Project → Connect → ORMs → Prisma** in the Supabase dashboard.
+- `docker-compose.yml` at repo root (not yet added): Redis only, once M4 needs it.
 - `pnpm install && pnpm build && pnpm dev` — unchanged from today.
 - Each app keeps its own `.env` (from `.env.example`), never committed.
 - `pnpm recall:spike` — must be run once per environment change to confirm the real Recall

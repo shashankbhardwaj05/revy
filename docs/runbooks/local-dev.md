@@ -4,7 +4,20 @@
 
 - Node.js ≥ 22 (installed)
 - pnpm ≥ 10 (`npm install -g pnpm`)
-- Homebrew (for Postgres + Redis from Phase 2: `brew install postgresql@16 redis`)
+- A Supabase project (Postgres) — see Database section below
+- Homebrew, for Redis once Phase 3/M4 (BullMQ) lands: `brew install redis`
+
+## Database (Supabase)
+
+Postgres is hosted on Supabase, for local dev and every other environment — there is no
+local Postgres install. To point your machine at it:
+
+1. Get the two connection strings from the Supabase dashboard: **Project → Connect →
+   ORMs → Prisma**.
+2. Put both into `apps/api/.env` and `packages/db/.env` (see `.env.example` in each):
+   `DATABASE_URL` (pooled, port 6543, `?pgbouncer=true` — used at runtime) and
+   `DIRECT_URL` (direct, port 5432 — used only for `prisma migrate`).
+3. Run migrations from `packages/db`: `npx prisma migrate deploy`.
 
 ## Running everything
 

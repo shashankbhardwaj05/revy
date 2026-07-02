@@ -28,7 +28,8 @@ cp apps/api/.env.example apps/api/.env   # fill in RECALL_API_KEY
 pnpm dev                                  # api :4000, web :3000, worker
 ```
 
-Postgres + Redis (Phase 2+) are installed via Homebrew — see `docs/runbooks/local-dev.md`.
+Postgres is hosted on Supabase (all environments, including local dev); Redis (Phase 3+)
+is installed via Homebrew — see `docs/runbooks/local-dev.md`.
 
 ## Recall spike
 
