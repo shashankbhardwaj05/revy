@@ -22,4 +22,9 @@ export class MeetingsController {
   getOne(@Param("id") id: string) {
     return this.meetings.getMeeting(id);
   }
+
+  @Get(":id/transcript")
+  getTranscript(@Param("id") id: string) {
+    return this.meetings.getTranscript(id);
+  }
 }

@@ -10,6 +10,7 @@ export const MeetingStatus = z.enum([
   "bot_joining",
   "bot_joined",
   "recording",
+  "transcribing",
   "meeting_ended",
   "processing",
   "completed",

@@ -41,6 +41,9 @@ importers:
       '@notetaker/recall':
         specifier: workspace:*
         version: link:../../packages/recall
+      fastify:
+        specifier: ^5.0.0
+        version: 5.8.5
       reflect-metadata:
         specifier: ^0.2.2
         version: 0.2.2

@@ -14,6 +14,7 @@ enum MeetingStatus {
   bot_joining
   bot_joined
   recording
+  transcribing
   meeting_ended
   processing
   completed
@@ -31,6 +32,23 @@ model Meeting {
   endedAt       DateTime?     @map("ended_at")
   createdAt     DateTime      @default(now()) @map("created_at")
   updatedAt     DateTime      @updatedAt @map("updated_at")
+  utterances    TranscriptUtterance[]
 
   @@map("meetings")
+}
+
+model TranscriptUtterance {
+  id        String   @id @default(uuid())
+  meetingId String   @map("meeting_id")
+  meeting   Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  seq       Int      @default(autoincrement())
+  speaker   String
+  text      String
+  startedMs Int?     @map("started_ms")
+  endedMs   Int?     @map("ended_ms")
+  isFinal   Boolean  @default(true) @map("is_final")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([meetingId, seq])
+  @@map("transcript_utterances")
 }

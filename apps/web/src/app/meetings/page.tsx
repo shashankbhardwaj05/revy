@@ -10,6 +10,7 @@ const STATUS_COLORS: Record<MeetingSummary["status"], string> = {
   bot_joining: "#b8860b",
   bot_joined: "#b8860b",
   recording: "#c00",
+  transcribing: "#c00",
   meeting_ended: "#0066cc",
   processing: "#0066cc",
   completed: "#0a8f3c",
@@ -39,8 +40,9 @@ export default async function MeetingsPage() {
       ) : (
         <div style={{ display: "grid", gap: 10 }}>
           {meetings.map((m) => (
-            <div
+            <Link
               key={m.id}
+              href={`/meetings/${m.id}`}
               style={{
                 border: "1px solid #e3e3e3",
                 borderRadius: 8,
@@ -48,6 +50,8 @@ export default async function MeetingsPage() {
                 display: "flex",
                 justifyContent: "space-between",
                 alignItems: "center",
+                textDecoration: "none",
+                color: "inherit",
               }}
             >
               <div>
@@ -66,7 +70,7 @@ export default async function MeetingsPage() {
               >
                 {m.status.replace("_", " ")}
               </span>
-            </div>
+            </Link>
           ))}
         </div>
       )}

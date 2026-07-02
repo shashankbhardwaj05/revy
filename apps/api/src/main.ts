@@ -12,6 +12,7 @@ async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     new FastifyAdapter(),
+    { rawBody: true },
   );
   app.enableCors({ origin: true });
   await app.listen(env.PORT, "0.0.0.0");
@@ -19,4 +20,8 @@ async function bootstrap() {
   console.log(`[api] listening on http://localhost:${env.PORT}`);
 }
 
-void bootstrap();
+bootstrap().catch((err) => {
+  // eslint-disable-next-line no-console
+  console.error("[api] failed to start:", err);
+  process.exit(1);
+});

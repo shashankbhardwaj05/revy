@@ -29,7 +29,8 @@ export default function HomePage() {
           : body.message ?? `Request failed (${res.status})`;
         throw new Error(message);
       }
-      router.push("/meetings");
+      const created = await res.json();
+      router.push(`/meetings/${created.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

@@ -1,7 +1,7 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { loadEnv } from "@notetaker/config";
-import type { CreateMeetingRequest, MeetingSummary } from "@notetaker/contracts";
-import { getPrisma, toMeetingSummary } from "@notetaker/db";
+import type { CreateMeetingRequest, MeetingSummary, Utterance } from "@notetaker/contracts";
+import { getPrisma, toMeetingSummary, toUtterance } from "@notetaker/db";
 import { RecallApiError, RecallClient } from "@notetaker/recall";
 
 @Injectable()
@@ -33,9 +33,11 @@ export class MeetingsService {
     }
 
     try {
+      const env = loadEnv();
       const bot = await recall.createBot({
         meetingUrl: input.meetingUrl,
         joinAt: input.joinAt,
+        transcriptWebhookUrl: `${env.APP_BASE_URL}/webhooks/recall`,
       });
       const updated = await this.prisma.meeting.update({
         where: { id: row.id },
@@ -62,5 +64,15 @@ export class MeetingsService {
     const row = await this.prisma.meeting.findUnique({ where: { id } });
     if (!row) throw new NotFoundException(`Meeting ${id} not found`);
     return toMeetingSummary(row);
+  }
+
+  async getTranscript(id: string): Promise<Utterance[]> {
+    const meeting = await this.prisma.meeting.findUnique({ where: { id } });
+    if (!meeting) throw new NotFoundException(`Meeting ${id} not found`);
+    const rows = await this.prisma.transcriptUtterance.findMany({
+      where: { meetingId: id },
+      orderBy: { seq: "asc" },
+    });
+    return rows.map(toUtterance);
   }
 }
