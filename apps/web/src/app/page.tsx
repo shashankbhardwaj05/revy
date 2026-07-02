@@ -39,7 +39,8 @@ export default function HomePage() {
 
   return (
     <main style={{ maxWidth: 640, margin: "80px auto", padding: "0 24px" }}>
-      <h1 style={{ fontSize: 28 }}>🎙️ AI Notetaker</h1>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src="/logo.png" alt="Revy Notetaker" style={{ height: 48, marginBottom: 20 }} />
       <p style={{ color: "#555", lineHeight: 1.6 }}>
         Paste a Google Meet link. A bot joins, records, and transcribes — the
         finished meeting lands in your{" "}

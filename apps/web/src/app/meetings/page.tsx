@@ -30,6 +30,8 @@ export default async function MeetingsPage() {
       <p style={{ marginBottom: 8 }}>
         <Link href="/">&larr; New meeting</Link>
       </p>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img src="/logo.png" alt="Revy Notetaker" style={{ height: 32, marginBottom: 12 }} />
       <h1 style={{ fontSize: 24, marginBottom: 16 }}>Meeting library</h1>
 
       {meetings.length === 0 ? (

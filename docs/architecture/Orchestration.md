@@ -10,6 +10,12 @@ Legend: ✅ Done &nbsp;·&nbsp; 🚧 Partial / scaffolded but not real &nbsp;·&
 
 ## 0. Vision
 
+**Branding:** this is being built for **BEAM** (Attentive.ai's product). The bot itself is
+named **"Revy Notetaker"** — that's the `bot_name` shown in the Meet participant list. The
+bot's camera tile shows the BEAM logo (`packages/recall/assets/bot-camera.jpg`, 1280x720
+JPEG) via Recall's `automatic_video_output`, confirmed working live 2026-07-03 — see M2
+findings below for the mechanism, since anonymous Recall bots have no plain "avatar" field.
+
 Build an AI meeting notetaker that:
 
 1. Joins Google Meet calls as a bot (Recall.ai in V1).
@@ -560,6 +566,13 @@ We are past M2, at the start of M3.
 - **Minor shape note:** the bot object echoes `meeting_url` back as an object
   (`{ meeting_id, platform }`), not the string we sent — irrelevant today since
   `RecallBot` is a catch-all type, but worth remembering if we ever parse this field.
+- **Bot camera image confirmed working live (2026-07-03):** anonymous bots have no
+  avatar field, but `automatic_video_output.{in_call_recording,in_call_not_recording}`
+  (`{ kind: "jpeg", b64_data: "<base64>" }`, ~1280x720, max 1.3MB) makes the bot show a
+  static image as its camera tile — no public image hosting needed. Confirmed visually
+  in a live call: the BEAM logo rendered correctly as "Revy Notetaker"'s camera feed.
+  The bot object echoes this field back with `b64_data` stripped to an empty string —
+  that's just response redaction, not a sign it failed.
 
 ---
 

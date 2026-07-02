@@ -9,6 +9,18 @@
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
+/**
+ * Default bot camera image (BEAM logo), shown via `automatic_video_output` — confirmed
+ * 2026-07-03 against docs.recall.ai: base64 JPEG, 16:9, ~1280x720, max 1.3MB, no public
+ * hosting required. Anonymous bots have no "avatar" field; a static camera feed is the
+ * only way to show a picture next to the bot's name.
+ */
+const DEFAULT_BOT_CAMERA_JPEG_BASE64 = readFileSync(
+  join(__dirname, "../assets/bot-camera.jpg"),
+).toString("base64");
 
 export interface RecallClientOptions {
   apiKey: string;
@@ -27,6 +39,8 @@ export interface CreateBotParams {
   joinAt?: string;
   /** Realtime transcript webhook endpoint (Phase 3). Omit for record-only. */
   transcriptWebhookUrl?: string;
+  /** Base64 JPEG shown as the bot's camera feed. Defaults to the BEAM logo. */
+  cameraImageBase64Jpeg?: string;
 }
 
 /** Raw bot object as returned by Recall — stored verbatim, never consumed downstream. */
@@ -77,9 +91,14 @@ export class RecallClient {
    * publicly reachable webhook URL.
    */
   async createBot(params: CreateBotParams): Promise<RecallBot> {
+    const cameraImage = params.cameraImageBase64Jpeg ?? DEFAULT_BOT_CAMERA_JPEG_BASE64;
     const payload: Record<string, unknown> = {
       meeting_url: params.meetingUrl,
-      bot_name: params.botName ?? "AI Notetaker",
+      bot_name: params.botName ?? "Revy Notetaker",
+      automatic_video_output: {
+        in_call_recording: { kind: "jpeg", b64_data: cameraImage },
+        in_call_not_recording: { kind: "jpeg", b64_data: cameraImage },
+      },
       recording_config: {
         transcript: {
           provider: { recallai_streaming: {} },
