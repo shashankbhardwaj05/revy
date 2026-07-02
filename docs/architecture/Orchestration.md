@@ -46,14 +46,34 @@ Versions:
 
 ## 1. Current Status — what's actually built (tick list)
 
-This is the honest state of `~/ai-notetaker` as of this document's authoring. Two commits
-exist (`58db0ce` bootstrap, `3dff5f9` meetings persistence). Everything below that isn't
-ticked is **not built**, regardless of what any earlier conversation may have implied.
+Last updated **2026-07-03, end of session**. This section is the first thing to read —
+if it and the code ever disagree, trust this doc and flag the drift rather than assuming
+either is right.
+
+### 🔴 Immediate next task (read this first)
+
+**`RECALL_WEBHOOK_SECRET` is blank on Railway's `api` service**, so the API's own webhook
+controller rejects every incoming request from Recall with 401 — even legitimate ones.
+The bot joins and records correctly, but live transcript updates and status progression
+past `bot_joining` silently never happen on the hosted deployment. Fix:
+
+1. Get the real secret from `https://{region}.recall.ai/dashboard/webhooks/` (`whsec_...`)
+   → set as `RECALL_WEBHOOK_SECRET` on the `api` service.
+2. On that same dashboard page, set the **workspace webhook URL** to
+   `https://notetakerapi-production.up.railway.app/webhooks/recall`.
+3. Redeploy `api`.
+
+Full diagnostic walkthrough (including how we recovered a lost transcript manually
+tonight) is in `docs/runbooks/webhook-debugging.md`. This is task #22 in the tracker and
+should be the very first thing done in the next session — everything else can wait
+behind it since it blocks actually trusting the hosted app.
 
 ### Repo / infra
 - ✅ pnpm workspace + Turborepo monorepo scaffolded
 - ✅ TypeScript strict mode base config shared across packages
 - ✅ Postgres hosted on Supabase (all environments incl. local dev) — migrated, verified end-to-end
+- ✅ **Deployed to Railway** — `api` and `web` services, both publicly reachable
+  (`notetakerapi-production.up.railway.app`, `notetakerweb-production.up.railway.app`)
 - ⬜ Docker Compose for local Redis (Postgres no longer needs this — Supabase covers it everywhere)
 - ⬜ Redis running/installed at all
 - ⬜ CI (no `.github/workflows`)
@@ -61,29 +81,43 @@ ticked is **not built**, regardless of what any earlier conversation may have im
 - ⬜ Tests of any kind
 
 ### Apps
-- 🚧 `apps/api` — NestJS + Fastify adapter running, health check, but only a bare `MeetingsModule`
-  (`POST/GET /meetings`) — no webhooks, no sessions, no auth, no orgs
-- 🚧 `apps/web` — Next.js app with a paste-link form and a meeting library list — no admin
-  dashboard, no playbook editor, no transcript viewer
-- 🚧 `apps/worker` — process boots, zero BullMQ processors wired
+- 🚧 `apps/api` — NestJS + Fastify, deployed and healthy. Has `MeetingsModule`
+  (`POST/GET /meetings`, `GET /meetings/:id`, `GET /meetings/:id/transcript`) and
+  `WebhooksModule` (`POST /webhooks/recall` — signature-verified, handles both
+  `transcript.data` and bot status events). No sessions, no auth, no orgs yet.
+- 🚧 `apps/web` — Next.js, deployed. Paste-link form, meeting library, and a
+  **live-polling meeting detail page** (`/meetings/[id]`, polls every ~2s) exist. No
+  admin dashboard, no playbook editor.
+- 🚧 `apps/worker` — process boots, zero BullMQ processors wired (bot creation happens
+  synchronously inside `apps/api`, not via this service — don't assume worker involvement
+  when debugging).
 - ⬜ `apps/extension` — **does not exist yet**
 
 ### Packages
-- 🚧 `packages/contracts` — only `MeetingStatus`, `CreateMeetingRequest`, `MeetingSummary`,
-  `Utterance` — none of the playbook/segment/sync contracts exist
+- 🚧 `packages/contracts` — `MeetingStatus` (now includes `transcribing`),
+  `CreateMeetingRequest`, `MeetingSummary`, `Utterance` — none of the playbook/segment/sync
+  contracts exist
 - ✅ `packages/config` — env loading/validation via Zod
-- ✅ `packages/recall` — bot creation, status polling, and transcript retrieval
-  confirmed against a real bot + live call (2026-07-03, see §17 M2 findings); only the
-  real-time webhook delivery path remains unverified (needs M4's public endpoint)
-- 🚧 `packages/db` — Prisma + Postgres wired and migrated, but schema has **one table**
-  (`meetings`) — none of the 20+ entities in §6 exist
+- ✅ `packages/recall` — bot creation, status polling, transcript retrieval, and webhook
+  signature verification all confirmed against real bots + live calls; bot camera image
+  (BEAM logo via `automatic_video_output`) confirmed live. Real-time webhook *delivery* is
+  code-complete and was exercised live once deployed, but is currently blocked end-to-end
+  by the missing `RECALL_WEBHOOK_SECRET` above (see immediate next task)
+- 🚧 `packages/db` — Prisma + Postgres wired and migrated. Schema has `meetings` and
+  `transcript_utterances` — still none of the other ~18 entities in §6 (orgs, users,
+  playbooks, segments, sync jobs)
 - ⬜ `packages/hubspot`, `packages/ai`, `packages/ui`, `packages/shared` — don't exist
 
 ### Functional capability
-- ✅ Paste a Meet URL → row persisted in Postgres → shows in a library UI
-- ✅ If `RECALL_API_KEY` is set, creates a real Recall bot that joins, records, and
-  transcribes — confirmed working end-to-end against a live call (2026-07-03)
-- ⬜ Real-time transcript ingestion (no webhook/websocket receiver exists)
+- ✅ Paste a Meet URL → row persisted in Supabase → shows in a library UI (hosted, works)
+- ✅ Real Recall bot joins, records, and transcribes — confirmed multiple times against
+  live calls, hosted and local
+- ✅ Webhook receiver exists, is signature-verified, and correctly processes both
+  `transcript.data` and bot-status events **when it can receive them** — currently it
+  can't, on the hosted deployment, due to the missing secret (immediate next task)
+- ✅ Manual recovery path exists and has been used twice: pull a finished bot's transcript
+  directly from Recall's async retrieval API and backfill it — see
+  `docs/runbooks/webhook-debugging.md`. Not yet a scripted tool.
 - ⬜ Segment detection engine
 - ⬜ Chrome extension of any kind
 - ⬜ Playbooks (editable checklists) — the `MeetingStatus` enum has `transcribing` now but
@@ -92,16 +126,23 @@ ticked is **not built**, regardless of what any earlier conversation may have im
 - ⬜ Auth / orgs / users (no `organizations`, `users`, `auth_accounts` tables)
 
 ### Process
-- ⬜ Git branching strategy — both commits went straight to `main`, no feature branches used yet
-- 🚧 Commit style — messages are Conventional-Commits-shaped but there's been no PR flow (solo, direct-to-main)
-- ⬜ `docs/architecture/*.md` suite (event-flow, data-model, extension, recall-ai, hubspot-sync) — only this file exists so far
-- ⬜ `docs/runbooks/webhook-debugging.md`, `docs/runbooks/failed-sync-retry.md`
+- 🚧 Git branching strategy — mostly followed since `docs/v1-architecture` (branch →
+  commit → fast-forward merge for every change tonight); the very first two commits still
+  went straight to `main`
+- 🚧 Commit style — Conventional-Commits-shaped, no PR flow yet (solo, direct-to-main merges)
+- 🚧 `docs/architecture/*.md` suite — `Orchestration.md` (this file) and
+  `docs/runbooks/webhook-debugging.md` are real now; `event-flow.md`, `data-model.md`,
+  `extension.md`, `recall-ai.md`, `hubspot-sync.md`, `docs/runbooks/failed-sync-retry.md`
+  are still just planned stubs
+- ✅ README has a real cost breakdown (Railway/Supabase/Recall.ai, verified pricing) and a
+  current-state data-flow diagram, kept separate from this doc's target-state one (§3)
 
-**Bottom line:** what exists today is V1 step 1, confirmed working end-to-end against a
-real Recall bot and a live call (manual URL → persisted row → real bot → real
-transcription). Steps 2–8 of the vision (real-time ingestion, segment detection,
-extension, HubSpot) are all still ahead of us, as is widening the data model to
-support playbooks/orgs/multi-tenancy at all.
+**Bottom line:** V1's core loop (paste URL → bot joins → transcribes → saved →
+browsable) is built and has been deployed and exercised against real meetings — but the
+hosted webhook pipeline is currently non-functional end-to-end because of one missing
+config value, not a code gap. Fix that first, verify a meeting updates live without
+manual intervention, *then* move to M3 (full data model) — don't start new feature work
+with a known-broken webhook path underneath it.
 
 ---
 
@@ -444,18 +485,33 @@ minutes or last M utterances — tune during implementation):
 
 ## 14. Deployment Plan
 
-- **Environments:** local → staging → production, each with its own Postgres, Redis,
-  Recall API key, and HubSpot credentials (HubSpot sandbox for staging).
-- **Hosting:** `apps/api` + `apps/worker` as two services on Render/Railway (same image,
-  different start command); `apps/web` as a Next.js service or Vercel; managed Postgres +
-  Redis add-ons.
+- **Environments:** local → production today (no separate staging yet); each with its own
+  Postgres (Supabase, currently shared across local + production — same DB, revisit
+  before real usage), Recall API key, and HubSpot credentials once that's built.
+- **Hosting — as deployed 2026-07-03:** `apps/api` and `apps/web` as two Railway services
+  in one project, both rooted at the repo root (pnpm workspace needs the root context to
+  resolve). **Not Vercel** — decided against splitting hosting providers once `apps/api`
+  needed to be an always-on process for the webhook receiver anyway; simpler to put
+  `apps/web` on the same platform. `apps/worker` is not deployed (does nothing yet —
+  bot creation runs synchronously inside `apps/api`).
+  - `api`: `https://notetakerapi-production.up.railway.app`
+  - `web`: `https://notetakerweb-production.up.railway.app`
+- **Cost:** see the README's Costs section for the full, sourced breakdown (Railway,
+  Supabase, Recall.ai) — kept there as the single source of truth rather than duplicated
+  here. Rough current total: **$5–20/month** at light personal-use volume.
 - **Extension:** built artifact uploaded to Chrome Web Store, unlisted/private distribution
   initially (internal tool), promoted to public listing later if needed.
-- **Infra as code:** `infra/` folder holds Render/Railway service definitions (or Terraform
-  if we outgrow the managed-PaaS model) — not built yet, currently everything is run
-  locally only.
-- **Migrations:** `prisma migrate deploy` runs as a release step before the new API version
-  goes live.
+- **Infra as code:** not built — Railway's dashboard config (build/start commands, env
+  vars) is the only "config," set up manually. Revisit if the project outgrows
+  click-ops deployment.
+- **Migrations:** currently run manually (`pnpm --filter @notetaker/db migrate:deploy`)
+  against the shared Supabase instance before deploying code that depends on schema
+  changes — not yet wired as an automatic release step.
+- **Deployment gotchas worth remembering** (full detail in README): `NEXT_PUBLIC_*` env
+  vars bake in at Next.js build time, not runtime — changing one needs a fresh build, not
+  just a restart; `.railway.internal` addresses are private-network-only and unreachable
+  from a browser; a missing env var on the API fails with a generic "Failed to fetch" on
+  the client with no useful detail — always check the service's own deploy logs first.
 
 ---
 
