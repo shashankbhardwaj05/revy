@@ -66,16 +66,17 @@ ticked is **not built**, regardless of what any earlier conversation may have im
 - 🚧 `packages/contracts` — only `MeetingStatus`, `CreateMeetingRequest`, `MeetingSummary`,
   `Utterance` — none of the playbook/segment/sync contracts exist
 - ✅ `packages/config` — env loading/validation via Zod
-- 🚧 `packages/recall` — typed client exists but **every payload shape is an unverified
-  guess** (marked `VERIFY` throughout) — the Phase 1 spike to confirm against real docs.recall.ai
-  behavior has never been run
+- ✅ `packages/recall` — bot creation, status polling, and transcript retrieval
+  confirmed against a real bot + live call (2026-07-03, see §18 M2 findings); only the
+  real-time webhook delivery path remains unverified (needs M4's public endpoint)
 - 🚧 `packages/db` — Prisma + Postgres wired and migrated, but schema has **one table**
   (`meetings`) — none of the 20+ entities in §6 exist
 - ⬜ `packages/hubspot`, `packages/airtable`, `packages/ai`, `packages/ui`, `packages/shared` — don't exist
 
 ### Functional capability
 - ✅ Paste a Meet URL → row persisted in Postgres → shows in a library UI
-- ✅ If `RECALL_API_KEY` is set, attempts to create a Recall bot (contract unverified — may not actually work)
+- ✅ If `RECALL_API_KEY` is set, creates a real Recall bot that joins, records, and
+  transcribes — confirmed working end-to-end against a live call (2026-07-03)
 - ⬜ Real-time transcript ingestion (no webhook/websocket receiver exists)
 - ⬜ Segment detection engine
 - ⬜ Chrome extension of any kind
@@ -92,10 +93,11 @@ ticked is **not built**, regardless of what any earlier conversation may have im
 - ⬜ `docs/architecture/*.md` suite (event-flow, data-model, extension, recall-ai, airtable-hubspot-sync) — only this file exists so far
 - ⬜ `docs/runbooks/webhook-debugging.md`, `docs/runbooks/failed-sync-retry.md`
 
-**Bottom line:** what exists today is a thin, honest slice of V1 step 1 only (manual URL →
-persisted row → best-effort bot creation). Steps 2–8 of the vision (real-time ingestion,
-segment detection, extension, Airtable, HubSpot) are all still ahead of us, as is widening
-the data model to support playbooks/orgs/multi-tenancy at all.
+**Bottom line:** what exists today is V1 step 1, confirmed working end-to-end against a
+real Recall bot and a live call (manual URL → persisted row → real bot → real
+transcription). Steps 2–8 of the vision (real-time ingestion, segment detection,
+extension, Airtable, HubSpot) are all still ahead of us, as is widening the data model to
+support playbooks/orgs/multi-tenancy at all.
 
 ---
 
@@ -509,7 +511,7 @@ template exists yet — add `.github/PULL_REQUEST_TEMPLATE.md` as part of
 |---|---|---|
 | M0 — Repo bootstrap | Monorepo, apps skeletons, health check | ✅ Done |
 | M1 — Basic persistence | Manual meeting URL → Postgres row → best-effort Recall bot → library UI | ✅ Done (this is as far as we've gotten) |
-| M2 — Recall contract verified | Run `pnpm recall:spike` for real, fix `packages/recall` against confirmed behavior | ⬜ Not started — biggest open risk |
+| M2 — Recall contract verified | Run `pnpm recall:spike` for real, fix `packages/recall` against confirmed behavior | ✅ Done 2026-07-03 — see findings below |
 | M3 — Full data model | Migrate to the schema in §6 (orgs, users, playbooks, segments, sync jobs, etc.) | ⬜ Not started |
 | M4 — Realtime ingestion | Webhook receiver w/ signature verification, Redis+BullMQ, transcript worker, WS gateway | ⬜ Not started |
 | M5 — Segment detection | Hybrid rule+LLM engine, evidence + confidence, manual override | ⬜ Not started |
@@ -519,7 +521,45 @@ template exists yet — add `.github/PULL_REQUEST_TEMPLATE.md` as part of
 | M9 — HubSpot sync | Matching + property writeback, mock mode fallback | ⬜ Not started |
 | M10 — V1 complete | End-to-end: paste URL → bot → live segments in extension → Airtable → HubSpot | ⬜ Not started |
 
-We are at the very start of M2.
+We are past M2, at the start of M3.
+
+### M2 findings (verified 2026-07-03 against a real bot + live Google Meet call)
+
+- **Base URL, auth header, region list — all confirmed correct** as originally coded:
+  `https://{region}.recall.ai/api/v1`, `Authorization: Token <key>`, regions are
+  `us-west-2` / `us-east-1` / `eu-central-1` / `ap-northeast-1` (fully separate
+  deployments, separate keys). This account's key works against `us-west-2`.
+- **Bug found and fixed:** the transcript provider key was wrong —
+  `recording_config.transcript.provider.meeting_captions` doesn't exist; the correct
+  key is `recallai_streaming` (Recall's built-in provider, no third-party transcription
+  API key needed for V0). Fixed in `packages/recall`.
+- **Real bot status codes observed, in order:** `joining_call` → `in_waiting_room` →
+  `in_call_not_recording` → `in_call_recording` → `call_ended` (with
+  `sub_code: "timeout_exceeded_everyone_left"` when the last participant leaves) →
+  `recording_done` → `done`. The spike script's terminal-state check
+  (`["done", "fatal", "call_ended"]`) is correct as originally written.
+- **Transcript retrieval (post-call):** `GET /bot/{id}/` returns
+  `recordings[0].media_shortcuts.transcript.data.download_url` once
+  `media_shortcuts.transcript.status.code === "done"` — a presigned S3 URL, no auth
+  header needed, that returns the full transcript as one JSON array with one entry per
+  **participant** (not per utterance): `{ participant: { id, name, is_host, ... },
+  words: [{ text, start_timestamp: { relative, absolute }, end_timestamp: {...} }] }`.
+  This is the shape for the async/full-transcript download — the real-time
+  `transcript.data` webhook (still unexercised — needs a public URL, see M4) delivers
+  smaller incremental chunks and was NOT validated by this spike.
+- **Webhook signature verification confirmed** (docs, not yet live-tested — no
+  receiver exists): headers `Webhook-Id` / `Webhook-Timestamp` / `Webhook-Signature`,
+  HMAC-SHA256 over `{id}.{timestamp}.{payload}`, key = base64 portion of a
+  `whsec_<base64>` secret, signature header may carry multiple space-separated
+  `v1,<sig>` values during rotation. Implemented as
+  `verifyRecallWebhookSignature()` in `packages/recall`, ready for M4 to wire up —
+  not yet used anywhere.
+- **Legacy endpoint trap:** `GET /bot/{id}/transcript/` (singular, no `/v1.10/`) is
+  deprecated and returns a string array telling you to use the retrieve-bot flow
+  above instead — don't use it.
+- **Minor shape note:** the bot object echoes `meeting_url` back as an object
+  (`{ meeting_id, platform }`), not the string we sent — irrelevant today since
+  `RecallBot` is a catch-all type, but worth remembering if we ever parse this field.
 
 ---
 

@@ -2,15 +2,21 @@
  * Typed Recall.ai client. This is the ONLY module in the codebase allowed to
  * talk to Recall — everything else consumes normalized types from @notetaker/contracts.
  *
- * ⚠️ CONTRACT VERIFICATION: endpoint paths, auth header format, and payload
- * shapes below follow the Recall.ai docs pattern but MUST be verified against
- * https://docs.recall.ai before the first real call (Phase 1 spike does this).
- * Anything marked VERIFY is an assumption until the spike confirms it.
+ * Verified 2026-07-03 against https://docs.recall.ai (base URL, auth header, region
+ * list, transcript provider name, webhook signature scheme). Anything still marked
+ * VERIFY below has not been confirmed against a real API response yet — the live
+ * spike (`pnpm recall:spike`) is what confirms those.
  */
+
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 export interface RecallClientOptions {
   apiKey: string;
-  /** Recall region, e.g. "us-west-2" — determines the API base URL. VERIFY against your account's region. */
+  /**
+   * Recall region — confirmed valid values: "us-west-2", "us-east-1", "eu-central-1",
+   * "ap-northeast-1". Regions are fully separate deployments with separate API keys —
+   * VERIFY this key's actual region empirically (a 401 means wrong region, not a bad key).
+   */
   region: string;
 }
 
@@ -43,7 +49,7 @@ export class RecallClient {
 
   constructor(opts: RecallClientOptions) {
     this.apiKey = opts.apiKey;
-    // VERIFY: regional base URL format per docs.recall.ai
+    // Confirmed per docs.recall.ai/docs/regions
     this.baseUrl = `https://${opts.region}.recall.ai/api/v1`;
   }
 
@@ -51,7 +57,7 @@ export class RecallClient {
     const res = await fetch(`${this.baseUrl}${path}`, {
       method,
       headers: {
-        // VERIFY: Recall uses "Authorization: Token <key>" per docs
+        // Confirmed per docs.recall.ai/reference/authentication
         Authorization: `Token ${this.apiKey}`,
         "Content-Type": "application/json",
       },
@@ -64,8 +70,11 @@ export class RecallClient {
 
   /**
    * Create a bot that joins the meeting and records + transcribes.
-   * VERIFY: recording_config / transcript provider shape against current docs
-   * before first use — this is the highest-drift part of the contract.
+   * `recording_config.transcript.provider.recallai_streaming` is confirmed per the
+   * docs.recall.ai quickstart — no third-party transcription API key required for V0.
+   * `realtime_endpoints` shape (webhook url + events array) is confirmed at a high
+   * level; exact optional fields are still VERIFY until exercised in M4 with a
+   * publicly reachable webhook URL.
    */
   async createBot(params: CreateBotParams): Promise<RecallBot> {
     const payload: Record<string, unknown> = {
@@ -73,7 +82,7 @@ export class RecallClient {
       bot_name: params.botName ?? "AI Notetaker",
       recording_config: {
         transcript: {
-          provider: { meeting_captions: {} }, // VERIFY: cheapest/simplest provider for V0
+          provider: { recallai_streaming: {} },
         },
         ...(params.transcriptWebhookUrl
           ? {
@@ -99,4 +108,48 @@ export class RecallClient {
   async removeBotFromCall(botId: string): Promise<void> {
     await this.request("POST", `/bot/${botId}/leave_call`);
   }
+}
+
+/** Exact header names Recall sends on every webhook/websocket request (case-insensitive over HTTP). */
+export const RECALL_WEBHOOK_HEADERS = {
+  id: "webhook-id",
+  timestamp: "webhook-timestamp",
+  signature: "webhook-signature",
+} as const;
+
+export interface RecallWebhookHeaders {
+  id: string;
+  timestamp: string;
+  /** May contain multiple space-separated "v1,<sig>" entries during secret rotation. */
+  signature: string;
+}
+
+/**
+ * Verifies a Recall.ai webhook/websocket request. Confirmed 2026-07-03 against
+ * docs.recall.ai/docs/authenticating-requests-from-recallai — HMAC-SHA256 over
+ * `{id}.{timestamp}.{payload}`, keyed by the base64 portion of the workspace secret
+ * (format `whsec_<base64>`). `payload` is the raw request body string — pass `""`
+ * for GET/websocket upgrade requests, which sign an empty payload.
+ *
+ * Not yet wired to a controller (that's M4) — this is ready to import once the
+ * webhook receiver exists.
+ */
+export function verifyRecallWebhookSignature(
+  headers: RecallWebhookHeaders,
+  payload: string,
+  secret: string,
+): boolean {
+  const key = Buffer.from(secret.replace(/^whsec_/, ""), "base64");
+  const signedContent = `${headers.id}.${headers.timestamp}.${payload}`;
+  const expected = createHmac("sha256", key).update(signedContent).digest("base64");
+
+  return headers.signature
+    .split(" ")
+    .map((entry) => entry.split(",")[1])
+    .filter((sig): sig is string => Boolean(sig))
+    .some((sig) => {
+      const a = Buffer.from(sig);
+      const b = Buffer.from(expected);
+      return a.length === b.length && timingSafeEqual(a, b);
+    });
 }
