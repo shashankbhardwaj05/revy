@@ -6,8 +6,9 @@ link → a Recall.ai bot joins, records, and transcribes → the finished meetin
 Google Drive).
 
 Full product architecture (live segment checklist, Chrome extension, Airtable/HubSpot
-sync) lives in `docs/architecture/overview.md` — this repo is built so those layers
-bolt on without rework.
+sync) lives in `docs/architecture/Orchestration.md` — this is the authoritative long-term
+plan, including a section ticking off what's actually built vs. still planned. Read it
+before making non-trivial changes.
 
 ## Structure
 
