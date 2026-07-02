@@ -28,8 +28,9 @@ verified end-to-end against live Google Meet calls, not just typechecked.
 ## Vision & orchestration
 
 This is being built toward a full meeting-intelligence platform: live segment/checklist
-detection against user-defined playbooks, a Chrome extension overlay, and syncing final
-meeting analysis to Airtable and then HubSpot. The **complete architecture — stack
+detection against user-defined playbooks, a Chrome extension overlay, and saving final
+meeting analysis to an internal ops table (same Supabase database — no Airtable) before
+syncing it to HubSpot. The **complete architecture — stack
 decisions, data model, event flow, security model, git strategy, and build roadmap —
 lives in [`docs/architecture/Orchestration.md`](docs/architecture/Orchestration.md).**
 
@@ -52,8 +53,7 @@ it first.
 | M5 | Segment detection engine (hybrid rules + LLM) | ⬜ |
 | M6 | Chrome extension | ⬜ |
 | M7 | Admin dashboard for playbooks | ⬜ |
-| M8 | Airtable sync | ⬜ |
-| M9 | HubSpot sync | ⬜ |
+| M9 | HubSpot sync (reads directly from Supabase — no Airtable in the pipeline) | ⬜ |
 
 Full detail on every row above — including *why* each decision was made — is in
 `Orchestration.md`.
@@ -131,4 +131,4 @@ webhook, which is wired automatically via `APP_BASE_URL`.
 
 Trunk-based development, short-lived feature branches
 (`feature/<area>-<description>`, `fix/...`, `docs/...`), Conventional Commits. Full
-branching and commit conventions are in `Orchestration.md` §16–17.
+branching and commit conventions are in `Orchestration.md` §15–16.
