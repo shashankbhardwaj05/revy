@@ -57,6 +57,7 @@ model MeetingSession {
 
   captureSessions CaptureSession[]
   utterances      TranscriptUtterance[]
+  participants    Participant[]
 
   @@map("meeting_sessions")
 }
@@ -70,7 +71,8 @@ model CaptureSession {
   status             String
   createdAt          DateTime        @default(now()) @map("created_at")
 
-  recallBot RecallBot?
+  recallBot  RecallBot?
+  rawEvents  TranscriptRawEvent[]
 
   @@map("capture_sessions")
 }
@@ -97,6 +99,8 @@ model TranscriptUtterance {
   endedMs          Int?     @map("ended_ms")
   isFinal          Boolean  @default(true) @map("is_final")
   createdAt        DateTime @default(now()) @map("created_at")
+
+  words TranscriptWord[]
 
   @@index([meetingSessionId, seq])
   @@map("transcript_utterances")
@@ -176,4 +180,40 @@ model SegmentDetectionRule {
   ruleConfig        Json     @map("rule_config")
 
   @@map("segment_detection_rules")
+}
+
+model Participant {
+  id               String   @id @default(uuid())
+  meetingSessionId String   @map("meeting_session_id")
+  meetingSession   MeetingSession @relation(fields: [meetingSessionId], references: [id], onDelete: Cascade)
+  name             String?
+  email            String?
+  isHost           Boolean  @default(false) @map("is_host")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@map("participants")
+}
+
+model TranscriptWord {
+  id          String   @id @default(uuid())
+  utteranceId String   @map("utterance_id")
+  utterance   TranscriptUtterance @relation(fields: [utteranceId], references: [id], onDelete: Cascade)
+  word        String
+  startedMs   Int?     @map("started_ms")
+  endedMs     Int?     @map("ended_ms")
+  confidence  Float?
+
+  @@map("transcript_words")
+}
+
+model TranscriptRawEvent {
+  id               String   @id @default(uuid())
+  captureSessionId String?  @map("capture_session_id")
+  captureSession   CaptureSession? @relation(fields: [captureSessionId], references: [id], onDelete: Cascade)
+  provider         String
+  eventType        String   @map("event_type")
+  payload          Json
+  receivedAt       DateTime @default(now()) @map("received_at")
+
+  @@map("transcript_raw_events")
 }
