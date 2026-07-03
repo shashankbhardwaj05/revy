@@ -18,30 +18,21 @@
 
 ---
 
-## ⚠️ Known issue — read this before testing
-
-**`RECALL_WEBHOOK_SECRET` is not configured on Railway**, so the API's webhook receiver
-rejects every incoming request from Recall with 401 — including legitimate ones. In
-practice this means: the bot joins and records fine, but the transcript won't appear live
-and the meeting status won't advance past `bot_joining`, even though Recall finishes the
-recording correctly on their end. This is **the #1 item on the checklist** — see the
-**Deployment → Known issue** section below for the exact fix. Until it's fixed, a
-finished meeting's transcript can be recovered manually (we've done this once already —
-see `docs/runbooks/webhook-debugging.md`).
-
 ## What works today
 
 - Paste a Google Meet link → a real Recall.ai bot joins the call (branded as **Revy
   Notetaker**, BEAM logo as its camera tile).
-- The transcript is designed to stream into the web app **live**, speaker-attributed, as
-  the meeting happens — verified working locally end-to-end; blocked on the hosted
-  deployment by the webhook secret issue above.
+- The transcript streams into the web app **live**, speaker-attributed, as the meeting
+  happens — verified end-to-end on the hosted deployment, not just locally.
 - When the meeting ends, the transcript is saved — every past meeting stays in your
   library, accessible any time.
-- Deployed and publicly reachable on Railway (`api` + `web` services).
+- Deployed and publicly reachable on Railway (`api` + `web` services), backed by the full
+  data model (orgs, users, playbooks, segments, sync jobs — see Milestones below).
 
-That's it, deliberately — no playbooks, segment detection, Chrome extension, or CRM sync
-yet. Those are real, planned, and documented (see below), just not built.
+That's it, deliberately — no playbooks UI, segment detection, Chrome extension, or CRM
+sync yet. The tables for those exist (M3, done), but the logic that populates and reads
+them doesn't (M4 onward). Those are real, planned, and documented (see below), just not
+built.
 
 ## Vision & orchestration
 
@@ -65,9 +56,9 @@ it first.
 | M1 | Basic persistence (paste link → DB row → bot) | ✅ |
 | M2 | Recall.ai contract verified against a live call | ✅ |
 | — | Hosted on Railway (`api` + `web`, both publicly reachable) | ✅ |
-| — | Live transcript ingestion (webhooks → DB → polling UI) | ✅ locally / 🚧 hosted — blocked on `RECALL_WEBHOOK_SECRET`, see Known Issue |
-| M3 | Full data model (orgs, users, playbooks, segments, sync jobs) | ⬜ |
-| M4 | WebSocket gateway + BullMQ (upgrading past polling) | ⬜ |
+| — | Live transcript ingestion (webhooks → DB → polling UI), hosted and verified | ✅ |
+| M3 | Full data model (orgs, users, playbooks, segments, sync jobs) | ✅ |
+| M4 | WebSocket gateway + BullMQ (upgrading past polling) | ⬜ ← next |
 | M5 | Segment detection engine (hybrid rules + LLM) | ⬜ |
 | M6 | Chrome extension | ⬜ |
 | M7 | Admin dashboard for playbooks | ⬜ |
@@ -103,17 +94,22 @@ CRM sync layers that don't exist yet).
                           ┌─────────┴──────┐   ┌───────────────────────┐
                           │   Recall.ai     │   │   Supabase Postgres    │
                           │  joins the Meet,│   │  single source of      │
-                          │  records, and   │   │  truth — meetings,     │
-                          │  transcribes    │   │  transcript_utterances │
-                          └─────────────────┘   └───────────────────────┘
+                          │  records, and   │   │  truth — full M3      │
+                          │  transcribes    │   │  schema (§6), ~22     │
+                          └─────────────────┘   │  tables               │
+                                                 └───────────────────────┘
 ```
 
 Steps, in order: (1) you paste a link, (2) the browser POSTs it to the API, (3) the API
-asks Recall to create a bot for that meeting, (4) as the meeting happens Recall sends
-webhooks back to the API — verified with an HMAC signature — which get written straight
-to Supabase (no queue yet, that's M4), (5) the browser polls the API every ~2 seconds and
-renders whatever's in the database. No WebSockets, no BullMQ, no Redis in this version —
-deliberately lean, upgraded later per the roadmap.
+asks Recall to create a bot, which creates a `Meeting` + `MeetingSession` +
+`CaptureSession` + `RecallBot` row, (4) as the meeting happens Recall sends webhooks back
+to the API — verified with an HMAC signature — resolved to the right session via the
+`RecallBot` → `CaptureSession` → `MeetingSession` chain and written straight to Supabase
+(no queue yet, that's M4), (5) the browser polls the API every ~2 seconds and renders
+whatever's in the database. No WebSockets, no BullMQ, no Redis in this version —
+deliberately lean, upgraded later per the roadmap. The full data model (playbooks,
+segments, HubSpot sync tables, etc.) exists as of M3 but most of it is unpopulated until
+M4 onward builds the logic that reads/writes it — see `Orchestration.md` §6 and §17.
 
 ## Costs
 
@@ -141,12 +137,16 @@ apps/
 packages/
   contracts/ — shared Zod schemas & types (single source of truth for API shapes)
   config/    — environment loading/validation
-  db/        — Prisma schema + client (Postgres, hosted on Supabase)
+  db/        — Prisma schema + client (Postgres, hosted on Supabase) — full M3 schema,
+               ~22 entities: orgs/users/playbooks/segments/sync jobs, see schema.prisma
   recall/    — typed Recall.ai client, webhook signature verification, bot branding asset
 docs/
   architecture/Orchestration.md — the plan (read this first)
   runbooks/local-dev.md         — local environment setup
   runbooks/webhook-debugging.md — diagnosing/recovering from webhook delivery failures
+  superpowers/plans/            — implementation plans for larger pieces of work (e.g.
+                                   the M3 data model migration), kept after execution as
+                                   a record of what was built and why
 scripts/
   recall-spike.ts — live-call verification tool against the real Recall.ai API
 ```
@@ -191,21 +191,20 @@ repo root (required for the pnpm workspace to resolve):
 | `api` | `pnpm install && pnpm build` | `pnpm --filter @notetaker/api start` | notetakerapi-production.up.railway.app |
 | `web` | `pnpm install && pnpm build` | `pnpm --filter @notetaker/web start` | notetakerweb-production.up.railway.app |
 
-**`api` env vars:** `RECALL_API_KEY`, `RECALL_REGION`, `RECALL_WEBHOOK_SECRET` (⚠️
-currently blank — see Known Issue above), `DATABASE_URL`, `DIRECT_URL`, `APP_BASE_URL`
-(set to the `api` service's own public URL above).
+**`api` env vars:** `RECALL_API_KEY`, `RECALL_REGION`, `RECALL_WEBHOOK_SECRET` (from
+`https://{region}.recall.ai/dashboard/webhooks/`, format `whsec_...` — configured), `DATABASE_URL`,
+`DIRECT_URL`, `APP_BASE_URL` (the `api` service's own public URL above — this is what gets
+baked into each new bot's per-bot transcript webhook URL at creation time; if it's ever
+missing again, new bots silently point their transcript webhook at `localhost:4000`, see
+`docs/runbooks/webhook-debugging.md`).
 
 **`web` env vars:** `NEXT_PUBLIC_API_URL` (the `api` service's public URL above).
 
-### Known issue — webhook secret not configured
-
-1. Get the real secret from `https://{region}.recall.ai/dashboard/webhooks/` (format
-   `whsec_...`) and set it as `RECALL_WEBHOOK_SECRET` on the `api` service.
-2. On that same dashboard page, configure the **workspace webhook URL** to
-   `<api-url>/webhooks/recall` — this delivers bot status events (join/leave/done)
-   separately from the per-bot transcript webhook (already auto-configured via
-   `APP_BASE_URL`).
-3. Redeploy `api`.
+Both `RECALL_WEBHOOK_SECRET` and `APP_BASE_URL` were the two real blockers that kept the
+hosted webhook pipeline non-functional for a while — see the "Historical incident" note in
+`docs/runbooks/webhook-debugging.md` for the full story if you ever see the same symptoms
+again (status stuck at `bot_joining`, or status advancing fine but no transcript ever
+appearing).
 
 ### Deployment gotchas learned the hard way
 

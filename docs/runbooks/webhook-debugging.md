@@ -3,6 +3,20 @@
 How to diagnose why a meeting's transcript or status isn't updating, and how to manually
 recover a meeting whose bot already finished on Recall's side.
 
+**Historical incident (2026-07-03, resolved):** the hosted app hit exactly the two
+failure modes this runbook describes, back to back. First, `RECALL_WEBHOOK_SECRET` was
+blank on Railway's `api` service — every bot-status webhook was rejected with 401 (§1
+below), fixed by creating a Svix endpoint in Recall's dashboard and setting the generated
+secret. Then, once that was fixed, a live test showed status advancing fine but *no
+transcript ever appeared* — root cause was `APP_BASE_URL` being unset, defaulting to
+`http://localhost:4000` (§2 below), which gets baked into each bot's *per-bot* transcript
+webhook URL at creation time — a separate mechanism from the workspace-level status
+webhook. Fixed by setting `APP_BASE_URL` to the `api` service's real public URL. Both are
+now configured and verified working via a live end-to-end Google Meet call. Keeping this
+note here since the exact symptom-to-cause mapping below is what solved it, and the same
+two variables are the first thing to check if this ever regresses (e.g., after rotating
+secrets or standing up a new environment).
+
 ## Symptom: meeting stuck at `bot_joining` forever, no transcript ever appears
 
 This almost always means webhooks from Recall aren't reaching the API, or are being
