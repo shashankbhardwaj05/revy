@@ -50,23 +50,53 @@ Last updated **2026-07-03, end of session**. This section is the first thing to 
 if it and the code ever disagree, trust this doc and flag the drift rather than assuming
 either is right.
 
-### 🔴 Immediate next task (read this first)
+### ✅ Webhook secret fixed (2026-07-03) — verify with a live call next session
 
-**`RECALL_WEBHOOK_SECRET` is blank on Railway's `api` service**, so the API's own webhook
-controller rejects every incoming request from Recall with 401 — even legitimate ones.
-The bot joins and records correctly, but live transcript updates and status progression
-past `bot_joining` silently never happen on the hosted deployment. Fix:
+`RECALL_WEBHOOK_SECRET` was blank on Railway's `api` service; the Recall dashboard had no
+webhook endpoint configured at all (confirmed via the Endpoints tab — Recall's webhook
+config is Svix-backed). Fixed:
 
-1. Get the real secret from `https://{region}.recall.ai/dashboard/webhooks/` (`whsec_...`)
-   → set as `RECALL_WEBHOOK_SECRET` on the `api` service.
-2. On that same dashboard page, set the **workspace webhook URL** to
-   `https://notetakerapi-production.up.railway.app/webhooks/recall`.
-3. Redeploy `api`.
+1. Created a Svix endpoint in the Recall dashboard
+   (`https://us-west-2.recall.ai/dashboard/webhooks/`) pointing at
+   `https://notetakerapi-production.up.railway.app/webhooks/recall`, subscribed to all
+   events (the handler in `webhooks.service.ts` already safely ignores unrecognized event
+   types, so no need to hand-pick checkboxes).
+2. Set `RECALL_WEBHOOK_SECRET` (the `whsec_...` value Svix generated) on the `api` service
+   via `railway variables --service "@notetaker/api" --set`.
+3. Railway auto-redeployed `api` on the variable change (deployment
+   `f79890bb-6bb3-408b-8610-c78c93bfff50`, `SUCCESS`).
+4. Verified: `curl -X POST .../webhooks/recall -d '{}'` now returns
+   `400 "Missing webhook signature headers"` instead of the old
+   `401 "Webhook receiver is not configured"` — confirms the secret is loaded and
+   signature verification is actually running, not just skipped.
 
-Full diagnostic walkthrough (including how we recovered a lost transcript manually
-tonight) is in `docs/runbooks/webhook-debugging.md`. This is task #22 in the tracker and
-should be the very first thing done in the next session — everything else can wait
-behind it since it blocks actually trusting the hosted app.
+### ✅ Second bug found + fixed during live-call verification (2026-07-03): `APP_BASE_URL`
+
+Testing the secret fix with a real call showed bot status advancing fine (`bot_joining` →
+... → `meeting_ended`) but **no transcript captured at all**. Root cause (found via
+`docs/runbooks/webhook-debugging.md` §2 — checking the bot's raw state on Recall):
+`APP_BASE_URL` defaults to `http://localhost:4000` in `packages/config/src/index.ts` and
+was never set on Railway's `api` service. `meetings.service.ts` uses it to build the
+**per-bot** transcript webhook URL (`recording_config.realtime_endpoints`) at
+bot-creation time — a separate mechanism from the workspace-level Svix endpoint above,
+which only carries `bot.*` status events. Every bot ever created on the hosted app had
+been telling Recall to deliver live transcript chunks to `localhost:4000` —
+unreachable — which is exactly why status worked but transcript never did.
+
+**Fix:** set `APP_BASE_URL=https://notetakerapi-production.up.railway.app` on the `api`
+service. Confirmed via a live test call end-to-end: new bot's `realtime_endpoints` now
+shows the correct public URL, meeting status reached `transcribing`, and
+`GET /meetings/:id/transcript` returned real captured speech. **Caveat:** this can't be
+fixed retroactively for bots already created before the var was set (their webhook URL
+is baked in at creation) — only meetings created after this fix will work.
+
+Both webhook blockers (secret + base URL) are now resolved and verified live. M3 (full
+data model) is unblocked and can start next.
+
+Railway project reference for this service: project `incredible-respect`, service
+`@notetaker/api`, environment `production` (Railway's generated project name doesn't
+match the repo name — use `railway status`/`railway link -p incredible-respect` to find
+it again if the CLI isn't already linked).
 
 ### Repo / infra
 - ✅ pnpm workspace + Turborepo monorepo scaffolded
@@ -101,8 +131,8 @@ behind it since it blocks actually trusting the hosted app.
 - ✅ `packages/recall` — bot creation, status polling, transcript retrieval, and webhook
   signature verification all confirmed against real bots + live calls; bot camera image
   (BEAM logo via `automatic_video_output`) confirmed live. Real-time webhook *delivery* is
-  code-complete and was exercised live once deployed, but is currently blocked end-to-end
-  by the missing `RECALL_WEBHOOK_SECRET` above (see immediate next task)
+  confirmed end-to-end live (2026-07-03) after fixing both `RECALL_WEBHOOK_SECRET` and
+  `APP_BASE_URL` — see Current Status above
 - 🚧 `packages/db` — Prisma + Postgres wired and migrated. Schema has `meetings` and
   `transcript_utterances` — still none of the other ~18 entities in §6 (orgs, users,
   playbooks, segments, sync jobs)
@@ -113,8 +143,8 @@ behind it since it blocks actually trusting the hosted app.
 - ✅ Real Recall bot joins, records, and transcribes — confirmed multiple times against
   live calls, hosted and local
 - ✅ Webhook receiver exists, is signature-verified, and correctly processes both
-  `transcript.data` and bot-status events **when it can receive them** — currently it
-  can't, on the hosted deployment, due to the missing secret (immediate next task)
+  `transcript.data` and bot-status events; confirmed live end-to-end (2026-07-03) after
+  fixing `RECALL_WEBHOOK_SECRET` and `APP_BASE_URL`
 - ✅ Manual recovery path exists and has been used twice: pull a finished bot's transcript
   directly from Recall's async retrieval API and backfill it — see
   `docs/runbooks/webhook-debugging.md`. Not yet a scripted tool.
@@ -138,11 +168,13 @@ behind it since it blocks actually trusting the hosted app.
   current-state data-flow diagram, kept separate from this doc's target-state one (§3)
 
 **Bottom line:** V1's core loop (paste URL → bot joins → transcribes → saved →
-browsable) is built and has been deployed and exercised against real meetings — but the
-hosted webhook pipeline is currently non-functional end-to-end because of one missing
-config value, not a code gap. Fix that first, verify a meeting updates live without
-manual intervention, *then* move to M3 (full data model) — don't start new feature work
-with a known-broken webhook path underneath it.
+browsable, all live/hosted, no manual backfill) is fully working and verified end-to-end
+as of 2026-07-03, after fixing two env-var gaps on Railway's `api` service:
+`RECALL_WEBHOOK_SECRET` (workspace-level bot-status webhooks were rejected outright) and
+`APP_BASE_URL` (per-bot transcript webhooks pointed at unreachable `localhost:4000`).
+Both confirmed via a real live Google Meet call: status advanced automatically to
+`transcribing` and `GET /meetings/:id/transcript` returned real captured speech with no
+manual intervention. M3 (full data model) is next.
 
 ---
 
