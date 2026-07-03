@@ -50,6 +50,7 @@ model Meeting {
   createdAt     DateTime  @default(now()) @map("created_at")
 
   sessions MeetingSession[]
+  externalCrmMappings ExternalCrmMapping[]
 
   @@map("meetings")
 }
@@ -69,6 +70,9 @@ model MeetingSession {
   utterances      TranscriptUtterance[]
   participants    Participant[]
   segmentStates   MeetingSegmentState[]
+  summaries       MeetingSummary[]
+  analysis        MeetingAnalysis?
+  hubspotSyncJobs HubspotSyncJob[]
 
   @@map("meeting_sessions")
 }
@@ -140,6 +144,7 @@ model User {
 
   authAccounts   AuthAccount[]
   manualOverrides ManualOverride[]
+  auditLogs      AuditLog[]
 
   @@map("users")
 }
@@ -272,4 +277,83 @@ model ManualOverride {
   createdAt             DateTime      @default(now()) @map("created_at")
 
   @@map("manual_overrides")
+}
+
+model MeetingSummary {
+  id               String   @id @default(uuid())
+  meetingSessionId String   @map("meeting_session_id")
+  meetingSession   MeetingSession @relation(fields: [meetingSessionId], references: [id], onDelete: Cascade)
+  summaryText      String   @map("summary_text")
+  actionItems      Json?    @map("action_items")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@map("meeting_summaries")
+}
+
+model MeetingAnalysis {
+  id                        String   @id @default(uuid())
+  meetingSessionId          String   @unique @map("meeting_session_id")
+  meetingSession            MeetingSession @relation(fields: [meetingSessionId], references: [id], onDelete: Cascade)
+  score                     Float?
+  requiredSegmentsCompleted Int      @default(0) @map("required_segments_completed")
+  missingSegments           Json?    @map("missing_segments")
+  pilotPitched              Boolean  @default(false) @map("pilot_pitched")
+  pricingDiscussed          Boolean  @default(false) @map("pricing_discussed")
+  nextStepConfirmed         Boolean  @default(false) @map("next_step_confirmed")
+  createdAt                 DateTime @default(now()) @map("created_at")
+
+  @@map("meeting_analysis")
+}
+
+model HubspotSyncJob {
+  id                String   @id @default(uuid())
+  meetingSessionId  String   @map("meeting_session_id")
+  meetingSession    MeetingSession @relation(fields: [meetingSessionId], references: [id], onDelete: Cascade)
+  status            String
+  attemptCount      Int      @default(0) @map("attempt_count")
+  lastError         String?  @map("last_error")
+  hubspotObjectType String?  @map("hubspot_object_type")
+  hubspotObjectId   String?  @map("hubspot_object_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@map("hubspot_sync_jobs")
+}
+
+model ExternalCrmMapping {
+  id                String   @id @default(uuid())
+  meetingId         String   @map("meeting_id")
+  meeting           Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  hubspotDealId     String?  @map("hubspot_deal_id")
+  hubspotContactId  String?  @map("hubspot_contact_id")
+  hubspotCompanyId  String?  @map("hubspot_company_id")
+  matchedVia        String?  @map("matched_via")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@map("external_crm_mappings")
+}
+
+model WebhookEvent {
+  id             String    @id @default(uuid())
+  provider       String
+  eventType      String    @map("event_type")
+  signatureValid Boolean   @map("signature_valid")
+  payload        Json
+  processedAt    DateTime? @map("processed_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  @@map("webhook_events")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  orgId       String?  @map("org_id")
+  actorUserId String?  @map("actor_user_id")
+  actor       User?    @relation(fields: [actorUserId], references: [id])
+  action      String
+  targetType  String   @map("target_type")
+  targetId    String   @map("target_id")
+  metadata    Json?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@map("audit_logs")
 }
