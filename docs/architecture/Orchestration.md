@@ -278,34 +278,38 @@ Postgres, one schema, org-scoped via `organization_id` FK on every tenant-owned 
 
 | Entity | Purpose | Key fields | Status |
 |---|---|---|---|
-| `organizations` | Tenant boundary | id, name, created_at | ⬜ |
-| `users` | People who log in | id, org_id, email, name, role | ⬜ |
-| `auth_accounts` | OAuth/local credentials per user | id, user_id, provider, provider_account_id | ⬜ |
-| `meetings` | Logical meeting (could be recurring series) | id, org_id, title, platform, meeting_url, playbook_id, hubspot_deal_id?, created_by | ⬜ |
-| `meeting_sessions` | One instance/occurrence of a meeting being captured | id, meeting_id, status (lifecycle §5), started_at, ended_at | ⬜ (today's `meetings` table is really this, flattened) |
-| `capture_sessions` | Provider-agnostic capture attempt (supports retry/rejoin) | id, meeting_session_id, provider (`recall`\|`local_desktop`), provider_session_ref, status | ⬜ |
-| `recall_bots` | Recall-specific bot record | id, capture_session_id, recall_bot_id, raw_last_payload (jsonb) | ⬜ |
-| `participants` | Attendees seen in a session | id, meeting_session_id, name, email?, is_host | ⬜ |
-| `transcript_utterances` | Normalized speaker turns | id, meeting_session_id, speaker, text, started_ms, ended_ms, is_final | 🚧 (contract type `Utterance` exists, no table) |
-| `transcript_words` | Word-level timing (optional granularity) | id, utterance_id, word, started_ms, ended_ms, confidence | ⬜ |
-| `transcript_raw_events` | Raw provider payloads, for debugging/replay | id, capture_session_id, provider, event_type, payload (jsonb), received_at | ⬜ |
-| `playbooks` | User-defined checklist templates | id, org_id, name, is_default | ⬜ |
-| `playbook_segments` | Segments belonging to a playbook | id, playbook_id, name, description, is_required, order | ⬜ |
-| `segment_detection_rules` | Deterministic rule config per segment (keywords/regex) | id, playbook_segment_id, rule_type, rule_config (jsonb) | ⬜ |
-| `meeting_segment_states` | Live/final status of a segment for a given session | id, meeting_session_id, playbook_segment_id, status (lifecycle §5), confidence, detected_at, speaker | ⬜ |
-| `segment_evidence` | Transcript snippets backing a detection | id, meeting_segment_state_id, utterance_id, snippet, reason_text | ⬜ |
-| `manual_overrides` | Human corrections to AI segment calls | id, meeting_segment_state_id, user_id, previous_status, new_status, note | ⬜ |
-| `meeting_summaries` | LLM-generated summary/action items | id, meeting_session_id, summary_text, action_items (jsonb) | ⬜ |
-| `meeting_analysis` | Final rollup used for sync | id, meeting_session_id, score, required_segments_completed, missing_segments (jsonb), pilot_pitched, pricing_discussed, next_step_confirmed | ⬜ |
-| `hubspot_sync_jobs` | Sync attempt log | id, meeting_session_id, status, attempt_count, last_error, hubspot_object_type, hubspot_object_id | ⬜ |
-| `external_crm_mappings` | Cached deal/contact/company resolution | id, meeting_id, hubspot_deal_id?, hubspot_contact_id?, hubspot_company_id?, matched_via | ⬜ |
-| `webhook_events` | Inbound webhook audit trail (all providers) | id, provider, event_type, signature_valid, payload (jsonb), processed_at | ⬜ |
-| `audit_logs` | Who did what, when | id, org_id, actor_user_id, action, target_type, target_id, metadata (jsonb) | ⬜ |
+| `organizations` | Tenant boundary | id, name, created_at | ✅ |
+| `users` | People who log in | id, org_id, email, name, role | ✅ |
+| `auth_accounts` | OAuth/local credentials per user | id, user_id, provider, provider_account_id | ✅ |
+| `meetings` | Logical meeting (could be recurring series) | id, org_id, title, meeting_url, playbook_id, hubspot_deal_id? | ✅ (no `platform`/`created_by` fields yet — not needed until V2 calendar work) |
+| `meeting_sessions` | One instance/occurrence of a meeting being captured | id, meeting_id, status (lifecycle §5), join_at, started_at, ended_at | ✅ |
+| `capture_sessions` | Provider-agnostic capture attempt (supports retry/rejoin) | id, meeting_session_id, provider (`recall`\|`local_desktop`), provider_session_ref, status | ✅ |
+| `recall_bots` | Recall-specific bot record | id, capture_session_id, recall_bot_id, raw_last_payload (jsonb) | ✅ |
+| `participants` | Attendees seen in a session | id, meeting_session_id, name, email?, is_host | ✅ (table exists, not yet populated — no code writes to it until M4/M5) |
+| `transcript_utterances` | Normalized speaker turns | id, meeting_session_id, speaker, text, started_ms, ended_ms, is_final | ✅ (now FK'd to `meeting_sessions`, not the old flattened `meetings`) |
+| `transcript_words` | Word-level timing (optional granularity) | id, utterance_id, word, started_ms, ended_ms, confidence | ✅ (table exists, unpopulated) |
+| `transcript_raw_events` | Raw provider payloads, for debugging/replay | id, capture_session_id, provider, event_type, payload (jsonb), received_at | ✅ (table exists, unpopulated — webhook handler still processes inline rather than storing raw payloads first, that's M4's job) |
+| `playbooks` | User-defined checklist templates | id, org_id, name, is_default | ✅ |
+| `playbook_segments` | Segments belonging to a playbook | id, playbook_id, name, description, is_required, order | ✅ |
+| `segment_detection_rules` | Deterministic rule config per segment (keywords/regex) | id, playbook_segment_id, rule_type, rule_config (jsonb) | ✅ |
+| `meeting_segment_states` | Live/final status of a segment for a given session | id, meeting_session_id, playbook_segment_id, status (lifecycle §5), confidence, detected_at, speaker | ✅ (table exists, unpopulated until M5's detection engine) |
+| `segment_evidence` | Transcript snippets backing a detection | id, meeting_segment_state_id, utterance_id, snippet, reason_text | ✅ |
+| `manual_overrides` | Human corrections to AI segment calls | id, meeting_segment_state_id, user_id, previous_status, new_status, note | ✅ |
+| `meeting_summaries` | LLM-generated summary/action items | id, meeting_session_id, summary_text, action_items (jsonb) | ✅ |
+| `meeting_analysis` | Final rollup used for sync | id, meeting_session_id, score, required_segments_completed, missing_segments (jsonb), pilot_pitched, pricing_discussed, next_step_confirmed | ✅ |
+| `hubspot_sync_jobs` | Sync attempt log | id, meeting_session_id, status, attempt_count, last_error, hubspot_object_type, hubspot_object_id | ✅ |
+| `external_crm_mappings` | Cached deal/contact/company resolution | id, meeting_id, hubspot_deal_id?, hubspot_contact_id?, hubspot_company_id?, matched_via | ✅ |
+| `webhook_events` | Inbound webhook audit trail (all providers) | id, provider, event_type, signature_valid, payload (jsonb), processed_at | ✅ (table exists; the live webhook handler doesn't write to it yet — still M4's job) |
+| `audit_logs` | Who did what, when | id, org_id, actor_user_id, action, target_type, target_id, metadata (jsonb) | ✅ (table exists, unpopulated — no admin actions exist yet to log) |
 
-Today's schema is just `meetings` (flattened `meeting` + `meeting_session` + a couple of
-`capture_session`/`recall_bots` fields bolted on). Migrating to the table above should
-happen **before** webhook ingestion work (§4 step 3) starts, since normalizing raw events
-into `transcript_utterances` needs the real tables to exist.
+**Migrated 2026-07-03** (M3) — see the M3 findings under §17 for the full migration
+story, including how existing production data was preserved through the
+`meetings` → `Meeting`+`MeetingSession`+`CaptureSession`+`RecallBot` split. All tables
+above now exist in the live database; several (`participants`, `transcript_words`,
+`transcript_raw_events`, `meeting_segment_states`, `webhook_events`, `audit_logs`) exist
+but are not yet written to by any code path — that's M4/M5/M9's job, not M3's. M3 was
+schema-only, deliberately not bundled with the business logic that will populate these
+tables.
 
 ---
 
@@ -559,7 +563,7 @@ template exists yet — add `.github/PULL_REQUEST_TEMPLATE.md` as part of
 | M0 — Repo bootstrap | Monorepo, apps skeletons, health check | ✅ Done |
 | M1 — Basic persistence | Manual meeting URL → Postgres row → best-effort Recall bot → library UI | ✅ Done (this is as far as we've gotten) |
 | M2 — Recall contract verified | Run `pnpm recall:spike` for real, fix `packages/recall` against confirmed behavior | ✅ Done 2026-07-03 — see findings below |
-| M3 — Full data model | Migrate to the schema in §6 (orgs, users, playbooks, segments, sync jobs, etc.) | ⬜ Not started |
+| M3 — Full data model | Migrate to the schema in §6 (orgs, users, playbooks, segments, sync jobs, etc.) | ✅ Done 2026-07-03 |
 | M4 — Realtime ingestion | Webhook receiver w/ signature verification, Redis+BullMQ, transcript worker, WS gateway | ⬜ Not started |
 | M5 — Segment detection | Hybrid rule+LLM engine, evidence + confidence, manual override | ⬜ Not started |
 | M6 — Chrome extension | `apps/extension`, widget, popup, background worker | ⬜ Not started |
@@ -567,9 +571,62 @@ template exists yet — add `.github/PULL_REQUEST_TEMPLATE.md` as part of
 | M9 — HubSpot sync | Matching + property writeback, mock mode fallback; reads `meeting_analysis` directly from Supabase — no Airtable in the pipeline | ⬜ Not started |
 | M10 — V1 complete | End-to-end: paste URL → bot → live segments in extension → HubSpot | ⬜ Not started |
 
-We are past M2, at the start of M3. (M8 — the old "Airtable sync" milestone — is
+We are past M3, at the start of M4. (M8 — the old "Airtable sync" milestone — is
 intentionally missing: dropped 2026-07-03, see §2's Database row and §6. M-numbers are
 kept stable rather than renumbered when a milestone is cut.)
+
+### M3 findings (implemented and verified live 2026-07-03)
+
+Implemented via `docs/superpowers/plans/2026-07-04-full-data-model.md`, executed with
+subagent-driven development (fresh implementer + independent reviewer per task, 7 tasks).
+
+- Migrated from the flattened single `meetings` table to the full schema in §6: added
+  `Organization`/`User`/`AuthAccount` (tenancy), `Playbook`/`PlaybookSegment`/
+  `SegmentDetectionRule` (playbooks), split `Meeting` into `Meeting` + `MeetingSession` +
+  `CaptureSession` + `RecallBot` (the one breaking change), `Participant`/
+  `TranscriptWord`/`TranscriptRawEvent` (transcript detail), `MeetingSegmentState`/
+  `SegmentEvidence`/`ManualOverride` (segment tracking), `MeetingSummary`/
+  `MeetingAnalysis`/`HubspotSyncJob`/`ExternalCrmMapping`/`WebhookEvent`/`AuditLog`
+  (analysis & sync). `MeetingStatus` widened with `processing_final_analysis` and
+  `synced_to_hubspot`.
+- **The Meeting/MeetingSession split ran against live production data with zero data
+  loss**, verified: all 9 existing meetings got a matching session, all 8 meetings that
+  had a `recall_bot_id` got a correctly-linked `CaptureSession`+`RecallBot` (the 9th
+  never had a bot, correctly excluded), all 5 transcript utterances re-linked to their
+  new session. A `pg_dump` backup was taken first as a safety net (not needed, but
+  confirmed valid).
+- Prisma's own auto-generated migration SQL was unsafe to run as-is (it would drop
+  `meetings.status`/`recall_bot_id`/etc. and add a `NOT NULL` column to
+  `transcript_utterances` with no default, against tables with real rows — Prisma itself
+  refused to run it non-interactively). The migration actually applied was hand-reordered:
+  new tables created and populated from existing data *before* any old column is
+  dropped, and `transcript_utterances.meeting_session_id` added nullable → backfilled →
+  set `NOT NULL`, only then dropping the old column. Runs as one transaction (no
+  concurrent-index statements), so a mid-migration failure would have rolled back
+  cleanly.
+- `meetings.service.ts` and `webhooks.service.ts` adapted to the new shape: bot creation
+  now creates a `MeetingSession` + `CaptureSession` + `RecallBot` together; incoming
+  Recall webhooks resolve via `RecallBot` → `CaptureSession` → `MeetingSession` instead of
+  `Meeting.recallBotId` directly. The public API contract (`MeetingSummary` shape) is
+  unchanged — `apps/web` needed only enum-exhaustiveness updates (`STATUS_COLORS`,
+  `TERMINAL_STATUSES`).
+- **Verified live end-to-end post-migration**: created a new meeting via the real API
+  against a live Google Meet call, confirmed the new `MeetingSession`/`CaptureSession`/
+  `RecallBot` rows were created correctly, status progressed
+  `bot_joining` → `recording` → `transcribing`, and real transcript text was captured —
+  the new code path works in production, not just in the DB-level verification script.
+- **Known follow-up, not yet done:** the `api` service was deployed via `railway up`
+  directly from the `feature/db-schema` branch (to close the outage window immediately
+  after the breaking migration) rather than through the normal `main`-based CD. The
+  branch has not been merged to `main` yet — until it is, a future push to `main` will
+  redeploy the pre-M3 code against the new (incompatible) schema. Merge `feature/db-schema`
+  to `main` before doing any other deploy.
+- Two Minor, non-blocking findings from task review, deferred: `meetings.service.ts`'s
+  `Meeting` + `MeetingSession` creation isn't wrapped in a single transaction (a rare
+  failure between the two calls could leave an orphaned `Meeting` with zero sessions,
+  which list/get endpoints already handle gracefully by filtering it out); and a
+  partial-failure edge case where a live Recall bot could be created but the DB write
+  fails, leaving a bot with no local record. Worth addressing in M4.
 
 ### M2 findings (verified 2026-07-03 against a real bot + live Google Meet call)
 
