@@ -52,3 +52,39 @@ model TranscriptUtterance {
   @@index([meetingId, seq])
   @@map("transcript_utterances")
 }
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  users     User[]
+
+  @@map("organizations")
+}
+
+model User {
+  id        String   @id @default(uuid())
+  orgId     String   @map("org_id")
+  org       Organization @relation(fields: [orgId], references: [id])
+  email     String   @unique
+  name      String?
+  role      String   @default("member")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  authAccounts AuthAccount[]
+
+  @@map("users")
+}
+
+model AuthAccount {
+  id                String   @id @default(uuid())
+  userId            String   @map("user_id")
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider          String
+  providerAccountId String   @map("provider_account_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@unique([provider, providerAccountId])
+  @@map("auth_accounts")
+}
