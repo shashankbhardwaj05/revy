@@ -129,6 +129,51 @@ export class RecallClient {
   }
 }
 
+/**
+ * Provider-agnostic capture abstraction (per Orchestration.md §0/§18): the goal is that
+ * bot-based capture (Recall today) can eventually be swapped for a Granola-style
+ * local/desktop capture with no visible bot, without rewriting the scheduling logic that
+ * calls it. Deliberately minimal — only the two operations actually called today
+ * (start a capture, stop one on cleanup). Per §18's own risk note, resist adding
+ * `startRecording`/`stopRecording`/`getStatus`/`handleProviderWebhook` speculatively —
+ * add them only once a second provider (or a real use of them) actually needs them.
+ */
+export interface CaptureSessionHandle {
+  /** Provider-specific reference for this capture attempt (Recall's bot id today). */
+  providerSessionRef: string;
+}
+
+export interface CaptureProviderCreateParams {
+  meetingUrl: string;
+  joinAt?: string;
+  /** Realtime transcript webhook endpoint. Omit for record-only. */
+  webhookUrl?: string;
+}
+
+export interface CaptureProvider {
+  /** Starts a capture session for the given meeting. Throws on failure. */
+  createSession(params: CaptureProviderCreateParams): Promise<CaptureSessionHandle>;
+  /** Stops/cancels an in-progress capture session — used for cleanup after a partial failure. */
+  stopSession(providerSessionRef: string): Promise<void>;
+}
+
+export class RecallBotProvider implements CaptureProvider {
+  constructor(private readonly client: RecallClient) {}
+
+  async createSession(params: CaptureProviderCreateParams): Promise<CaptureSessionHandle> {
+    const bot = await this.client.createBot({
+      meetingUrl: params.meetingUrl,
+      joinAt: params.joinAt,
+      transcriptWebhookUrl: params.webhookUrl,
+    });
+    return { providerSessionRef: bot.id };
+  }
+
+  async stopSession(providerSessionRef: string): Promise<void> {
+    await this.client.removeBotFromCall(providerSessionRef);
+  }
+}
+
 /** Exact header names Recall sends on every webhook/websocket request (case-insensitive over HTTP). */
 export const RECALL_WEBHOOK_HEADERS = {
   id: "webhook-id",
@@ -150,8 +195,10 @@ export interface RecallWebhookHeaders {
  * (format `whsec_<base64>`). `payload` is the raw request body string — pass `""`
  * for GET/websocket upgrade requests, which sign an empty payload.
  *
- * Not yet wired to a controller (that's M4) — this is ready to import once the
- * webhook receiver exists.
+ * Wired into apps/api/src/webhooks/webhooks.controller.ts. This only proves the request
+ * wasn't tampered with — it does NOT prove freshness, since the signature is a pure
+ * function of values that never change once captured. Always pair with
+ * `isRecallWebhookTimestampFresh` to reject replays of an old, correctly-signed request.
  */
 export function verifyRecallWebhookSignature(
   headers: RecallWebhookHeaders,
@@ -171,4 +218,22 @@ export function verifyRecallWebhookSignature(
       const b = Buffer.from(expected);
       return a.length === b.length && timingSafeEqual(a, b);
     });
+}
+
+/**
+ * A correctly-signed webhook request is a bearer credential with no built-in expiry —
+ * anyone who captures one in full (headers + raw body) could replay it indefinitely.
+ * Rejects requests whose `Webhook-Timestamp` (Unix seconds, per Svix-style headers) is
+ * further than `toleranceSeconds` from now, in either direction (also guards against a
+ * clock-skewed or malicious future timestamp).
+ */
+export function isRecallWebhookTimestampFresh(
+  timestamp: string,
+  toleranceSeconds = 5 * 60,
+  nowMs: number = Date.now(),
+): boolean {
+  const timestampSeconds = Number(timestamp);
+  if (!Number.isFinite(timestampSeconds)) return false;
+  const ageSeconds = Math.abs(nowMs / 1000 - timestampSeconds);
+  return ageSeconds <= toleranceSeconds;
 }

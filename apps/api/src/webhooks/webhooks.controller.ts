@@ -7,7 +7,11 @@ import {
   type RawBodyRequest,
 } from "@nestjs/common";
 import { loadEnv } from "@notetaker/config";
-import { RECALL_WEBHOOK_HEADERS, verifyRecallWebhookSignature } from "@notetaker/recall";
+import {
+  RECALL_WEBHOOK_HEADERS,
+  isRecallWebhookTimestampFresh,
+  verifyRecallWebhookSignature,
+} from "@notetaker/recall";
 import type { FastifyRequest } from "fastify";
 import { WebhooksService } from "./webhooks.service";
 
@@ -34,8 +38,13 @@ export class WebhooksController {
     if (!valid) {
       throw new UnauthorizedException("Invalid webhook signature");
     }
+    // A valid signature alone doesn't prove freshness — it's a function of values that
+    // never change once captured, so a captured request would otherwise replay forever.
+    if (!isRecallWebhookTimestampFresh(timestamp)) {
+      throw new UnauthorizedException("Webhook timestamp is too old");
+    }
 
-    await this.webhooks.handleRecallEvent(JSON.parse(raw));
+    await this.webhooks.handleRecallEvent(JSON.parse(raw), id);
     return { ok: true };
   }
 }

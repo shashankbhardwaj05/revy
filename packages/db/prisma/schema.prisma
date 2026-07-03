@@ -113,6 +113,9 @@ model TranscriptUtterance {
   startedMs        Int?     @map("started_ms")
   endedMs          Int?     @map("ended_ms")
   isFinal          Boolean  @default(true) @map("is_final")
+  /** Recall's Webhook-Id header — stable across retries of the same delivery, used to
+      reject duplicate inserts when Recall redelivers a transcript.data event. */
+  recallWebhookId  String?  @unique @map("recall_webhook_id")
   createdAt        DateTime @default(now()) @map("created_at")
 
   words TranscriptWord[]

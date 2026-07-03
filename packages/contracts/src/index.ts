@@ -12,6 +12,9 @@ export const MeetingStatus = z.enum([
   "recording",
   "transcribing",
   "meeting_ended",
+  // Recall finishing ITS OWN recording/transcript pipeline (set from the `bot.recording_done`
+  // webhook) — not to be confused with `processing_final_analysis` below, which is a later,
+  // distinct stage: OUR future LLM summary/finalization step, not yet built.
   "processing",
   "processing_final_analysis",
   "synced_to_hubspot",
@@ -20,11 +23,25 @@ export const MeetingStatus = z.enum([
 ]);
 export type MeetingStatus = z.infer<typeof MeetingStatus>;
 
+/**
+ * Real hostname check, not a substring match — `.includes("meet.google.com")` would also
+ * accept e.g. `https://evil.example.com/?x=meet.google.com` or
+ * `https://meet.google.com.evil.example.com/x`, letting a crafted URL dispatch our Recall
+ * bot to an attacker-controlled page.
+ */
+function isGoogleMeetUrl(value: string): boolean {
+  try {
+    return new URL(value).hostname === "meet.google.com";
+  } catch {
+    return false;
+  }
+}
+
 export const CreateMeetingRequest = z.object({
   meetingUrl: z
     .string()
     .url()
-    .refine((u) => u.includes("meet.google.com"), {
+    .refine(isGoogleMeetUrl, {
       message: "Only Google Meet URLs are supported in V0",
     }),
   title: z.string().min(1).max(200).optional(),

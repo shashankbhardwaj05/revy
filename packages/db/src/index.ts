@@ -6,7 +6,7 @@ import {
 } from "@prisma/client";
 import type { MeetingSummary, Utterance } from "@notetaker/contracts";
 
-export { PrismaClient } from "@prisma/client";
+export { PrismaClient, Prisma } from "@prisma/client";
 export type {
   Meeting as MeetingRow,
   MeetingSession as MeetingSessionRow,

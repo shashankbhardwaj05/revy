@@ -6,14 +6,12 @@ import { useEffect, useRef, useState } from "react";
 import type { MeetingSummary, Utterance } from "@notetaker/contracts";
 import { API_BASE_URL } from "../../../lib/api";
 
-const TERMINAL_STATUSES: MeetingSummary["status"][] = [
-  "meeting_ended",
-  "processing",
-  "processing_final_analysis",
-  "synced_to_hubspot",
-  "completed",
-  "failed",
-];
+/**
+ * Only these two are true dead ends in the lifecycle (see webhooks.service.ts's
+ * STATUS_ORDER) — meeting_ended/processing/synced_to_hubspot are waypoints on the way
+ * to completed, not final states, so polling must continue through them.
+ */
+const TERMINAL_STATUSES: MeetingSummary["status"][] = ["completed", "failed"];
 
 export default function MeetingDetailPage() {
   const params = useParams<{ id: string }>();
@@ -44,7 +42,12 @@ export default function MeetingDetailPage() {
           timer = setTimeout(poll, 2000);
         }
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : String(err));
+        // A transient failure (network blip, momentary 5xx) shouldn't permanently kill
+        // live updates for the rest of the meeting — keep retrying until the page
+        // unmounts or a poll succeeds again.
+        timer = setTimeout(poll, 2000);
       }
     }
 
@@ -71,7 +74,7 @@ export default function MeetingDetailPage() {
         <>
           <h1 style={{ fontSize: 22, marginBottom: 4 }}>{meeting.title ?? meeting.meetingUrl}</h1>
           <p style={{ fontSize: 13, color: "#777", marginBottom: 20 }}>
-            Status: <strong>{meeting.status.replace("_", " ")}</strong>
+            Status: <strong>{meeting.status.replace(/_/g, " ")}</strong>
             {!TERMINAL_STATUSES.includes(meeting.status) && " — live"}
           </p>
 

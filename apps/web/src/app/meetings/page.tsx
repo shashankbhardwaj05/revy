@@ -70,7 +70,7 @@ export default async function MeetingsPage() {
                   textTransform: "uppercase",
                 }}
               >
-                {m.status.replace("_", " ")}
+                {m.status.replace(/_/g, " ")}
               </span>
             </Link>
           ))}
