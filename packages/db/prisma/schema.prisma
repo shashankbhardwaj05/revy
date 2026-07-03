@@ -17,39 +17,88 @@ enum MeetingStatus {
   transcribing
   meeting_ended
   processing
+  processing_final_analysis
+  synced_to_hubspot
   completed
   failed
 }
 
+enum CaptureProvider {
+  recall
+  local_desktop
+}
+
 model Meeting {
-  id            String        @id @default(uuid())
+  id            String    @id @default(uuid())
+  orgId         String?   @map("org_id")
+  org           Organization? @relation(fields: [orgId], references: [id])
   title         String?
-  meetingUrl    String        @map("meeting_url")
-  status        MeetingStatus @default(created)
-  recallBotId   String?       @map("recall_bot_id")
-  joinAt        DateTime?     @map("join_at")
-  startedAt     DateTime?     @map("started_at")
-  endedAt       DateTime?     @map("ended_at")
-  createdAt     DateTime      @default(now()) @map("created_at")
-  updatedAt     DateTime      @updatedAt @map("updated_at")
-  utterances    TranscriptUtterance[]
+  meetingUrl    String    @map("meeting_url")
+  playbookId    String?   @map("playbook_id")
+  playbook      Playbook? @relation(fields: [playbookId], references: [id])
+  hubspotDealId String?   @map("hubspot_deal_id")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  sessions MeetingSession[]
 
   @@map("meetings")
 }
 
-model TranscriptUtterance {
-  id        String   @id @default(uuid())
-  meetingId String   @map("meeting_id")
-  meeting   Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
-  seq       Int      @default(autoincrement())
-  speaker   String
-  text      String
-  startedMs Int?     @map("started_ms")
-  endedMs   Int?     @map("ended_ms")
-  isFinal   Boolean  @default(true) @map("is_final")
-  createdAt DateTime @default(now()) @map("created_at")
+model MeetingSession {
+  id        String        @id @default(uuid())
+  meetingId String        @map("meeting_id")
+  meeting   Meeting       @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  status    MeetingStatus @default(created)
+  joinAt    DateTime?     @map("join_at")
+  startedAt DateTime?     @map("started_at")
+  endedAt   DateTime?     @map("ended_at")
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
 
-  @@index([meetingId, seq])
+  captureSessions CaptureSession[]
+  utterances      TranscriptUtterance[]
+
+  @@map("meeting_sessions")
+}
+
+model CaptureSession {
+  id                 String          @id @default(uuid())
+  meetingSessionId   String          @map("meeting_session_id")
+  meetingSession     MeetingSession  @relation(fields: [meetingSessionId], references: [id], onDelete: Cascade)
+  provider           CaptureProvider @default(recall)
+  providerSessionRef String?         @map("provider_session_ref")
+  status             String
+  createdAt          DateTime        @default(now()) @map("created_at")
+
+  recallBot RecallBot?
+
+  @@map("capture_sessions")
+}
+
+model RecallBot {
+  id               String         @id @default(uuid())
+  captureSessionId String         @unique @map("capture_session_id")
+  captureSession   CaptureSession @relation(fields: [captureSessionId], references: [id], onDelete: Cascade)
+  recallBotId      String         @unique @map("recall_bot_id")
+  rawLastPayload   Json?          @map("raw_last_payload")
+  createdAt        DateTime       @default(now()) @map("created_at")
+
+  @@map("recall_bots")
+}
+
+model TranscriptUtterance {
+  id               String   @id @default(uuid())
+  meetingSessionId String   @map("meeting_session_id")
+  meetingSession   MeetingSession @relation(fields: [meetingSessionId], references: [id], onDelete: Cascade)
+  seq              Int      @default(autoincrement())
+  speaker          String
+  text             String
+  startedMs        Int?     @map("started_ms")
+  endedMs          Int?     @map("ended_ms")
+  isFinal          Boolean  @default(true) @map("is_final")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@index([meetingSessionId, seq])
   @@map("transcript_utterances")
 }
 
@@ -60,6 +109,7 @@ model Organization {
 
   users     User[]
   playbooks Playbook[]
+  meetings  Meeting[]
 
   @@map("organizations")
 }
@@ -99,6 +149,7 @@ model Playbook {
   createdAt DateTime @default(now()) @map("created_at")
 
   segments PlaybookSegment[]
+  meetings Meeting[]
 
   @@map("playbooks")
 }
