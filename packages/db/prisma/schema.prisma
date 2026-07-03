@@ -59,6 +59,7 @@ model Organization {
   createdAt DateTime @default(now()) @map("created_at")
 
   users     User[]
+  playbooks Playbook[]
 
   @@map("organizations")
 }
@@ -87,4 +88,41 @@ model AuthAccount {
 
   @@unique([provider, providerAccountId])
   @@map("auth_accounts")
+}
+
+model Playbook {
+  id        String   @id @default(uuid())
+  orgId     String   @map("org_id")
+  org       Organization @relation(fields: [orgId], references: [id])
+  name      String
+  isDefault Boolean  @default(false) @map("is_default")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  segments PlaybookSegment[]
+
+  @@map("playbooks")
+}
+
+model PlaybookSegment {
+  id          String   @id @default(uuid())
+  playbookId  String   @map("playbook_id")
+  playbook    Playbook @relation(fields: [playbookId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  isRequired  Boolean  @default(true) @map("is_required")
+  order       Int
+
+  rules  SegmentDetectionRule[]
+
+  @@map("playbook_segments")
+}
+
+model SegmentDetectionRule {
+  id                String   @id @default(uuid())
+  playbookSegmentId String   @map("playbook_segment_id")
+  playbookSegment   PlaybookSegment @relation(fields: [playbookSegmentId], references: [id], onDelete: Cascade)
+  ruleType          String   @map("rule_type")
+  ruleConfig        Json     @map("rule_config")
+
+  @@map("segment_detection_rules")
 }
