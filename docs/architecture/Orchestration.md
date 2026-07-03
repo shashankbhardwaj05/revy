@@ -46,103 +46,155 @@ Versions:
 
 ## 1. Current Status — what's actually built (tick list)
 
-Last updated **2026-07-03, end of session**. This section is the first thing to read —
+Last updated **2026-07-03/04, end of session**. This section is the first thing to read —
 if it and the code ever disagree, trust this doc and flag the drift rather than assuming
-either is right.
+either is right. (This section itself drifted once already tonight — `feature/db-schema`
+was branched from `main` before an earlier webhook-fix doc update had been merged in, so
+`main` briefly regressed to showing a stale "webhook secret blank" status here even though
+the code and production were already fixed. Rewritten from scratch below to match reality
+as of this checkpoint. If you find a stranded, still-unmerged doc branch again, check
+`git branch -a` and reconcile before trusting either side.)
 
-### 🔴 Immediate next task (read this first)
+### Immediate next task
 
-**`RECALL_WEBHOOK_SECRET` is blank on Railway's `api` service**, so the API's own webhook
-controller rejects every incoming request from Recall with 401 — even legitimate ones.
-The bot joins and records correctly, but live transcript updates and status progression
-past `bot_joining` silently never happen on the hosted deployment. Fix:
-
-1. Get the real secret from `https://{region}.recall.ai/dashboard/webhooks/` (`whsec_...`)
-   → set as `RECALL_WEBHOOK_SECRET` on the `api` service.
-2. On that same dashboard page, set the **workspace webhook URL** to
-   `https://notetakerapi-production.up.railway.app/webhooks/recall`.
-3. Redeploy `api`.
-
-Full diagnostic walkthrough (including how we recovered a lost transcript manually
-tonight) is in `docs/runbooks/webhook-debugging.md`. This is task #22 in the tracker and
-should be the very first thing done in the next session — everything else can wait
-behind it since it blocks actually trusting the hosted app.
+None blocking — the app is live, the full data model is in place, and a full bug/security
+review pass has been applied and deployed. **Next real work is M4** (realtime ingestion —
+Redis+BullMQ, transcript worker, WebSocket gateway) — see §17/§19. A WebSocket-based
+design for live transcript push was scoped out this session (rooms keyed by `meetingId`,
+no queue yet, see the M4 design note in §17) but not yet implemented — polling is still
+what's live in `apps/web` today.
 
 ### Repo / infra
 - ✅ pnpm workspace + Turborepo monorepo scaffolded
 - ✅ TypeScript strict mode base config shared across packages
 - ✅ Postgres hosted on Supabase (all environments incl. local dev) — migrated, verified end-to-end
 - ✅ **Deployed to Railway** — `api` and `web` services, both publicly reachable
-  (`notetakerapi-production.up.railway.app`, `notetakerweb-production.up.railway.app`)
+  (`notetakerapi-production.up.railway.app`, `notetakerweb-production.up.railway.app`),
+  both currently deployed from `main`
 - ⬜ Docker Compose for local Redis (Postgres no longer needs this — Supabase covers it everywhere)
 - ⬜ Redis running/installed at all
 - ⬜ CI (no `.github/workflows`)
 - ⬜ Lint config (no ESLint/Prettier)
-- ⬜ Tests of any kind
+- ⬜ Tests of any kind (verification this session was throwaway Node scripts + live smoke
+  tests + a full agent-driven code/security review — see below — not a standing suite)
 
 ### Apps
 - 🚧 `apps/api` — NestJS + Fastify, deployed and healthy. Has `MeetingsModule`
   (`POST/GET /meetings`, `GET /meetings/:id`, `GET /meetings/:id/transcript`) and
-  `WebhooksModule` (`POST /webhooks/recall` — signature-verified, handles both
-  `transcript.data` and bot status events). No sessions, no auth, no orgs yet.
+  `WebhooksModule` (`POST /webhooks/recall` — signature-verified with both HMAC check
+  *and* a timestamp-freshness window to reject replays, idempotent against Recall
+  redelivery). No sessions, no auth, no orgs enforced at the API layer yet even though the
+  tables exist (see Packages below).
 - 🚧 `apps/web` — Next.js, deployed. Paste-link form, meeting library, and a
-  **live-polling meeting detail page** (`/meetings/[id]`, polls every ~2s) exist. No
-  admin dashboard, no playbook editor.
+  **live-polling meeting detail page** (`/meetings/[id]`, polls every ~2s, auto-retries
+  through transient failures) exist. No admin dashboard, no playbook editor.
 - 🚧 `apps/worker` — process boots, zero BullMQ processors wired (bot creation happens
   synchronously inside `apps/api`, not via this service — don't assume worker involvement
   when debugging).
 - ⬜ `apps/extension` — **does not exist yet**
 
 ### Packages
-- 🚧 `packages/contracts` — `MeetingStatus` (now includes `transcribing`),
-  `CreateMeetingRequest`, `MeetingSummary`, `Utterance` — none of the playbook/segment/sync
-  contracts exist
+- 🚧 `packages/contracts` — `MeetingStatus` (full lifecycle incl. `processing_final_analysis`/
+  `synced_to_hubspot`), `CreateMeetingRequest` (real hostname validation, not substring),
+  `MeetingSummary`, `Utterance` — playbook/segment/sync tables exist in the DB (via
+  `packages/db`) but have no contract types yet since nothing reads/writes them
 - ✅ `packages/config` — env loading/validation via Zod
-- ✅ `packages/recall` — bot creation, status polling, transcript retrieval, and webhook
-  signature verification all confirmed against real bots + live calls; bot camera image
-  (BEAM logo via `automatic_video_output`) confirmed live. Real-time webhook *delivery* is
-  code-complete and was exercised live once deployed, but is currently blocked end-to-end
-  by the missing `RECALL_WEBHOOK_SECRET` above (see immediate next task)
-- 🚧 `packages/db` — Prisma + Postgres wired and migrated. Schema has `meetings` and
-  `transcript_utterances` — still none of the other ~18 entities in §6 (orgs, users,
-  playbooks, segments, sync jobs)
+- ✅ `packages/recall` — bot creation, status polling, transcript retrieval, webhook
+  signature verification (HMAC + timestamp freshness), and a minimal `CaptureProvider`
+  interface + `RecallBotProvider` implementation (the "day one" abstraction from §0 — was
+  missing until tonight, `MeetingsService` no longer imports `RecallClient` directly) —
+  all confirmed against real bots + live calls
+- ✅ `packages/db` — Prisma + Postgres, **full ~22-entity schema from §6 migrated** (M3,
+  done): orgs, users, playbooks, segments, sync jobs, etc. all exist as tables. Only
+  `Meeting`/`MeetingSession`/`CaptureSession`/`RecallBot`/`TranscriptUtterance` are
+  actually read/written by code today — the rest (`participants`, `transcript_words`,
+  `meeting_segment_states`, `webhook_events`, `audit_logs`, etc.) exist but are unpopulated
+  until M4/M5/M9 build the logic that uses them
 - ⬜ `packages/hubspot`, `packages/ai`, `packages/ui`, `packages/shared` — don't exist
 
 ### Functional capability
 - ✅ Paste a Meet URL → row persisted in Supabase → shows in a library UI (hosted, works)
-- ✅ Real Recall bot joins, records, and transcribes — confirmed multiple times against
-  live calls, hosted and local
-- ✅ Webhook receiver exists, is signature-verified, and correctly processes both
-  `transcript.data` and bot-status events **when it can receive them** — currently it
-  can't, on the hosted deployment, due to the missing secret (immediate next task)
-- ✅ Manual recovery path exists and has been used twice: pull a finished bot's transcript
-  directly from Recall's async retrieval API and backfill it — see
-  `docs/runbooks/webhook-debugging.md`. Not yet a scripted tool.
+- ✅ Real Recall bot joins, records, and transcribes live — confirmed end-to-end against
+  real Google Meet calls, hosted, including a fresh smoke test after tonight's fixes
+- ✅ Webhook receiver: signature-verified, replay-protected, idempotent against Recall's
+  at-least-once redelivery, and correctly advances a meeting's status **all the way to
+  `completed`** — a real bug found tonight (see below) previously stranded every meeting
+  at `meeting_ended` forever
+- ✅ Manual recovery path exists (pull a finished bot's transcript directly from Recall's
+  async retrieval API) — see `docs/runbooks/webhook-debugging.md`. Not yet a scripted tool,
+  and less likely to be needed now that the status-progression bug is fixed
 - ⬜ Segment detection engine
 - ⬜ Chrome extension of any kind
-- ⬜ Playbooks (editable checklists) — the `MeetingStatus` enum has `transcribing` now but
-  still needs `processing_final_analysis` and `synced_to_hubspot` to match §5 below
+- ⬜ Playbooks (editable checklists) — tables exist (M3), no CRUD UI or detection logic yet
 - ⬜ HubSpot sync
-- ⬜ Auth / orgs / users (no `organizations`, `users`, `auth_accounts` tables)
+- ⬜ Auth / orgs / users enforced anywhere — tables exist (M3), nothing populates or checks
+  them yet; every API endpoint is still fully open/unauthenticated (a known, intentional
+  V1 scope decision, not a bug)
+
+### Full bug + security review pass (2026-07-03/04)
+
+Ran a full-codebase review (not diff-scoped — repo was clean) across two dimensions:
+correctness bugs (8 parallel finder angles + independent verification per candidate) and
+security (dedicated pass with false-positive filtering). All 10 surviving findings were
+fixed and deployed the same night:
+
+1. **Status-progression bug (the big one)** — `webhooks.service.ts`'s terminal-status
+   guard treated `meeting_ended` as a dead end, but Recall's real event order sends
+   `recording_done`/`done` *after* `call_ended` — so every meeting that finished normally
+   was silently stuck at `meeting_ended` forever, never reaching `processing`/`completed`.
+   Replaced the flat terminal-status set with an explicit lifecycle-order check
+   (`STATUS_ORDER` + `isForwardTransition`).
+2. **SSRF-style URL validation** — `meetingUrl` was checked via `.includes("meet.google.com")`,
+   which a crafted URL (e.g. `?x=meet.google.com`) could pass while pointing our Recall
+   bot anywhere. Now checks the real hostname.
+3. **Non-transactional bot creation** — Meeting+Session now commit atomically (nested
+   create); capture-session/recall-bot/status writes run in one `$transaction`; a bot
+   that's created but fails to persist locally is now stopped via the provider instead of
+   left running/billing with no local record.
+4. **No webhook dedup** — added a unique `recallWebhookId` column on
+   `TranscriptUtterance` (additive migration) so a Recall redelivery is a no-op instead of
+   a duplicate transcript row.
+5. **Webhook replay** — signature verification proved authenticity but not freshness;
+   added a 5-minute timestamp-freshness check (`isRecallWebhookTimestampFresh`).
+6. **Frontend polling died on first error** — the detail page's poll loop didn't
+   reschedule itself after a catch block; one transient failure permanently killed live
+   updates until a manual refresh. Now retries.
+7. **Missing webhook-secret pre-check** — a deploy with `RECALL_API_KEY` set but
+   `RECALL_WEBHOOK_SECRET` unset would silently strand every meeting at `bot_joining`
+   forever. Now refuses to start a real bot and logs why.
+8. **`status.replace("_", " ")`** only replaced the first underscore (plain-string
+   `.replace()` isn't global) — `processing_final_analysis` rendered wrong. Fixed to `/_/g`.
+9. **`CaptureProvider` abstraction** — called a "day one" requirement in §0, didn't exist;
+   `MeetingsService` had Recall hardcoded directly. Added the minimal interface (just the
+   two operations actually used — see §18's own warning against speculative methods) +
+   `RecallBotProvider`.
+10. **`processing` vs `processing_final_analysis` naming collision** — clarified via
+    comments (no schema change); still worth real disambiguation once M4/M7 build the
+    finalization job that will actually use the second one.
 
 ### Process
-- 🚧 Git branching strategy — mostly followed since `docs/v1-architecture` (branch →
-  commit → fast-forward merge for every change tonight); the very first two commits still
-  went straight to `main`
-- 🚧 Commit style — Conventional-Commits-shaped, no PR flow yet (solo, direct-to-main merges)
+- 🚧 Git branching strategy — mixed tonight: M3 went through a proper
+  `feature/db-schema` branch + review + merge; the webhook-fix docs and tonight's 10-item
+  bug-fix batch went straight to `main` given the hour. Revisit branch discipline next
+  session.
+- 🚧 Commit style — Conventional-Commits-shaped, no PR flow enforced yet
 - 🚧 `docs/architecture/*.md` suite — `Orchestration.md` (this file) and
-  `docs/runbooks/webhook-debugging.md` are real now; `event-flow.md`, `data-model.md`,
-  `extension.md`, `recall-ai.md`, `hubspot-sync.md`, `docs/runbooks/failed-sync-retry.md`
-  are still just planned stubs
+  `docs/runbooks/webhook-debugging.md` are real and current; `event-flow.md`,
+  `data-model.md`, `extension.md`, `recall-ai.md`, `hubspot-sync.md`,
+  `docs/runbooks/failed-sync-retry.md` are still just planned stubs
 - ✅ README has a real cost breakdown (Railway/Supabase/Recall.ai, verified pricing) and a
-  current-state data-flow diagram, kept separate from this doc's target-state one (§3)
+  current-state data-flow diagram, kept separate from this doc's target-state one (§3),
+  updated tonight to match the Meeting/MeetingSession chain and the fixed env vars
+- ⚠️ `docs/webhook-fix-notes` branch (GitHub) is a stranded, unmerged doc-only branch from
+  earlier tonight — its content has since been superseded by direct edits on `main`, safe
+  to close/delete without merging
 
-**Bottom line:** V1's core loop (paste URL → bot joins → transcribes → saved →
-browsable) is built and has been deployed and exercised against real meetings — but the
-hosted webhook pipeline is currently non-functional end-to-end because of one missing
-config value, not a code gap. Fix that first, verify a meeting updates live without
-manual intervention, *then* move to M3 (full data model) — don't start new feature work
-with a known-broken webhook path underneath it.
+**Bottom line:** V1's core loop (paste URL → bot joins → transcribes → saved → browsable,
+live, hosted, with status correctly reaching `completed`) is fully working and verified.
+M3 (full data model) is done. A full bug + security sweep found and fixed 10 real issues,
+including one that silently broke every meeting's final status. Next up: M4 (realtime
+ingestion) — the WebSocket push design discussed tonight is ready to implement whenever
+picked back up.
 
 ---
 
