@@ -28,6 +28,16 @@ enum CaptureProvider {
   local_desktop
 }
 
+enum SegmentStatus {
+  not_started
+  detected_in_progress
+  completed_ai
+  completed_manual
+  marked_not_applicable
+  rejected_low_confidence
+  missed
+}
+
 model Meeting {
   id            String    @id @default(uuid())
   orgId         String?   @map("org_id")
@@ -58,6 +68,7 @@ model MeetingSession {
   captureSessions CaptureSession[]
   utterances      TranscriptUtterance[]
   participants    Participant[]
+  segmentStates   MeetingSegmentState[]
 
   @@map("meeting_sessions")
 }
@@ -127,7 +138,8 @@ model User {
   role      String   @default("member")
   createdAt DateTime @default(now()) @map("created_at")
 
-  authAccounts AuthAccount[]
+  authAccounts   AuthAccount[]
+  manualOverrides ManualOverride[]
 
   @@map("users")
 }
@@ -168,6 +180,7 @@ model PlaybookSegment {
   order       Int
 
   rules  SegmentDetectionRule[]
+  states MeetingSegmentState[]
 
   @@map("playbook_segments")
 }
@@ -216,4 +229,47 @@ model TranscriptRawEvent {
   receivedAt       DateTime @default(now()) @map("received_at")
 
   @@map("transcript_raw_events")
+}
+
+model MeetingSegmentState {
+  id                String        @id @default(uuid())
+  meetingSessionId  String        @map("meeting_session_id")
+  meetingSession    MeetingSession @relation(fields: [meetingSessionId], references: [id], onDelete: Cascade)
+  playbookSegmentId String        @map("playbook_segment_id")
+  playbookSegment   PlaybookSegment @relation(fields: [playbookSegmentId], references: [id])
+  status            SegmentStatus @default(not_started)
+  confidence        Float?
+  detectedAt        DateTime?     @map("detected_at")
+  speaker           String?
+
+  evidence  SegmentEvidence[]
+  overrides ManualOverride[]
+
+  @@map("meeting_segment_states")
+}
+
+model SegmentEvidence {
+  id                    String   @id @default(uuid())
+  meetingSegmentStateId String   @map("meeting_segment_state_id")
+  meetingSegmentState   MeetingSegmentState @relation(fields: [meetingSegmentStateId], references: [id], onDelete: Cascade)
+  utteranceId           String?  @map("utterance_id")
+  snippet               String
+  reasonText            String?  @map("reason_text")
+  createdAt             DateTime @default(now()) @map("created_at")
+
+  @@map("segment_evidence")
+}
+
+model ManualOverride {
+  id                    String        @id @default(uuid())
+  meetingSegmentStateId String        @map("meeting_segment_state_id")
+  meetingSegmentState   MeetingSegmentState @relation(fields: [meetingSegmentStateId], references: [id], onDelete: Cascade)
+  userId                String?       @map("user_id")
+  user                  User?         @relation(fields: [userId], references: [id])
+  previousStatus        SegmentStatus @map("previous_status")
+  newStatus             SegmentStatus @map("new_status")
+  note                  String?
+  createdAt             DateTime      @default(now()) @map("created_at")
+
+  @@map("manual_overrides")
 }
