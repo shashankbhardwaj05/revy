@@ -16,10 +16,12 @@ export class MeetingsService {
   }
 
   async createMeeting(input: CreateMeetingRequest): Promise<MeetingSummary> {
-    const row = await this.prisma.meeting.create({
+    const meeting = await this.prisma.meeting.create({
+      data: { meetingUrl: input.meetingUrl, title: input.title },
+    });
+    const session = await this.prisma.meetingSession.create({
       data: {
-        meetingUrl: input.meetingUrl,
-        title: input.title,
+        meetingId: meeting.id,
         joinAt: input.joinAt ? new Date(input.joinAt) : undefined,
       },
     });
@@ -27,9 +29,9 @@ export class MeetingsService {
     const recall = this.recallClient();
     if (!recall) {
       this.logger.warn(
-        `RECALL_API_KEY not set — created meeting ${row.id} without starting a bot (dev mode)`,
+        `RECALL_API_KEY not set — created meeting ${meeting.id} without starting a bot (dev mode)`,
       );
-      return toMeetingSummary(row);
+      return toMeetingSummary(meeting, session);
     }
 
     try {
@@ -39,38 +41,55 @@ export class MeetingsService {
         joinAt: input.joinAt,
         transcriptWebhookUrl: `${env.APP_BASE_URL}/webhooks/recall`,
       });
-      const updated = await this.prisma.meeting.update({
-        where: { id: row.id },
-        data: { recallBotId: bot.id, status: "bot_joining" },
+      const captureSession = await this.prisma.captureSession.create({
+        data: { meetingSessionId: session.id, provider: "recall", status: "created" },
       });
-      return toMeetingSummary(updated);
+      await this.prisma.recallBot.create({
+        data: { captureSessionId: captureSession.id, recallBotId: bot.id },
+      });
+      const updatedSession = await this.prisma.meetingSession.update({
+        where: { id: session.id },
+        data: { status: "bot_joining" },
+      });
+      return toMeetingSummary(meeting, updatedSession);
     } catch (err) {
       const reason = err instanceof RecallApiError ? err.message : String(err);
-      this.logger.error(`Recall bot creation failed for meeting ${row.id}: ${reason}`);
-      const failed = await this.prisma.meeting.update({
-        where: { id: row.id },
+      this.logger.error(`Recall bot creation failed for meeting ${meeting.id}: ${reason}`);
+      const failedSession = await this.prisma.meetingSession.update({
+        where: { id: session.id },
         data: { status: "failed" },
       });
-      return toMeetingSummary(failed);
+      return toMeetingSummary(meeting, failedSession);
     }
   }
 
   async listMeetings(): Promise<MeetingSummary[]> {
-    const rows = await this.prisma.meeting.findMany({ orderBy: { createdAt: "desc" } });
-    return rows.map(toMeetingSummary);
+    const meetings = await this.prisma.meeting.findMany({
+      orderBy: { createdAt: "desc" },
+      include: { sessions: { orderBy: { createdAt: "desc" }, take: 1 } },
+    });
+    return meetings
+      .filter((m) => m.sessions.length > 0)
+      .map((m) => toMeetingSummary(m, m.sessions[0]));
   }
 
   async getMeeting(id: string): Promise<MeetingSummary> {
-    const row = await this.prisma.meeting.findUnique({ where: { id } });
-    if (!row) throw new NotFoundException(`Meeting ${id} not found`);
-    return toMeetingSummary(row);
+    const meeting = await this.prisma.meeting.findUnique({
+      where: { id },
+      include: { sessions: { orderBy: { createdAt: "desc" }, take: 1 } },
+    });
+    if (!meeting || meeting.sessions.length === 0) throw new NotFoundException(`Meeting ${id} not found`);
+    return toMeetingSummary(meeting, meeting.sessions[0]);
   }
 
   async getTranscript(id: string): Promise<Utterance[]> {
-    const meeting = await this.prisma.meeting.findUnique({ where: { id } });
-    if (!meeting) throw new NotFoundException(`Meeting ${id} not found`);
+    const meeting = await this.prisma.meeting.findUnique({
+      where: { id },
+      include: { sessions: { orderBy: { createdAt: "desc" }, take: 1 } },
+    });
+    if (!meeting || meeting.sessions.length === 0) throw new NotFoundException(`Meeting ${id} not found`);
     const rows = await this.prisma.transcriptUtterance.findMany({
-      where: { meetingId: id },
+      where: { meetingSessionId: meeting.sessions[0].id },
       orderBy: { seq: "asc" },
     });
     return rows.map(toUtterance);

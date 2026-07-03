@@ -13,6 +13,8 @@ const STATUS_COLORS: Record<MeetingSummary["status"], string> = {
   transcribing: "#c00",
   meeting_ended: "#0066cc",
   processing: "#0066cc",
+  processing_final_analysis: "#0066cc",
+  synced_to_hubspot: "#0a8f3c",
   completed: "#0a8f3c",
   failed: "#c00",
 };

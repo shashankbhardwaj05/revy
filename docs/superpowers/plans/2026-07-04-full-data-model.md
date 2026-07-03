@@ -173,7 +173,27 @@ git commit -m "feat(db): add Organization, User, AuthAccount models"
   `Meeting.playbookId` references `Playbook.id`. Task 5's `MeetingSegmentState` and
   `ManualOverride` reference `PlaybookSegment.id`.
 
-- [ ] **Step 1: Add the models to `schema.prisma`**
+- [ ] **Step 1: Add the models to `schema.prisma`, and add the required back-relation
+  to the existing `Organization` model**
+
+`Playbook.org` below is a relation to `Organization`, so `Organization` needs a matching
+`playbooks Playbook[]` field or `prisma generate`/`migrate dev` will fail validation with
+"missing an opposite relation field on the model Organization" — Task 1 deliberately left
+this off `Organization` since `Playbook` didn't exist yet. Add this one line to the
+existing `Organization` model block (do not touch anything else in it):
+
+```prisma
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  users     User[]
+  playbooks Playbook[]
+
+  @@map("organizations")
+}
+```
 
 ```prisma
 model Playbook {
@@ -185,7 +205,6 @@ model Playbook {
   createdAt DateTime @default(now()) @map("created_at")
 
   segments PlaybookSegment[]
-  meetings Meeting[]
 
   @@map("playbooks")
 }
@@ -334,7 +353,41 @@ This keeps `packages/contracts`' `MeetingSummary` shape unchanged and avoids tou
 `apps/web` beyond the enum exhaustiveness checks TypeScript will force.
 
 - [ ] **Step 1: Update `schema.prisma`** — replace the existing `Meeting` model and
-  `MeetingStatus` enum, and update `TranscriptUtterance`:
+  `MeetingStatus` enum, update `TranscriptUtterance`, and add the required back-relations
+  to `Organization` and `Playbook`.
+
+`Meeting` below gets `orgId`/`org` and `playbookId`/`playbook` relation fields, so both
+`Organization` and `Playbook` need a matching `meetings Meeting[]` field (same reasoning
+as Task 2's Organization/Playbook fix — Prisma requires both sides of a relation
+declared). Add one line to each existing model:
+
+```prisma
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  users     User[]
+  playbooks Playbook[]
+  meetings  Meeting[]
+
+  @@map("organizations")
+}
+
+model Playbook {
+  id        String   @id @default(uuid())
+  orgId     String   @map("org_id")
+  org       Organization @relation(fields: [orgId], references: [id])
+  name      String
+  isDefault Boolean  @default(false) @map("is_default")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  segments PlaybookSegment[]
+  meetings Meeting[]
+
+  @@map("playbooks")
+}
+```
 
 ```prisma
 enum MeetingStatus {

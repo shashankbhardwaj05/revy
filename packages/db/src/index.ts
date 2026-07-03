@@ -1,12 +1,17 @@
 import {
   PrismaClient,
   type Meeting as MeetingRow,
+  type MeetingSession as MeetingSessionRow,
   type TranscriptUtterance as TranscriptUtteranceRow,
 } from "@prisma/client";
 import type { MeetingSummary, Utterance } from "@notetaker/contracts";
 
 export { PrismaClient } from "@prisma/client";
-export type { Meeting as MeetingRow, TranscriptUtterance as TranscriptUtteranceRow } from "@prisma/client";
+export type {
+  Meeting as MeetingRow,
+  MeetingSession as MeetingSessionRow,
+  TranscriptUtterance as TranscriptUtteranceRow,
+} from "@prisma/client";
 
 let cached: PrismaClient | undefined;
 
@@ -15,15 +20,15 @@ export function getPrisma(): PrismaClient {
   return cached;
 }
 
-export function toMeetingSummary(row: MeetingRow): MeetingSummary {
+export function toMeetingSummary(meeting: MeetingRow, session: MeetingSessionRow): MeetingSummary {
   return {
-    id: row.id,
-    title: row.title,
-    meetingUrl: row.meetingUrl,
-    status: row.status,
-    createdAt: row.createdAt.toISOString(),
-    startedAt: row.startedAt?.toISOString() ?? null,
-    endedAt: row.endedAt?.toISOString() ?? null,
+    id: meeting.id,
+    title: meeting.title,
+    meetingUrl: meeting.meetingUrl,
+    status: session.status,
+    createdAt: meeting.createdAt.toISOString(),
+    startedAt: session.startedAt?.toISOString() ?? null,
+    endedAt: session.endedAt?.toISOString() ?? null,
   };
 }
 

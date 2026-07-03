@@ -13,6 +13,8 @@ export const MeetingStatus = z.enum([
   "transcribing",
   "meeting_ended",
   "processing",
+  "processing_final_analysis",
+  "synced_to_hubspot",
   "completed",
   "failed",
 ]);

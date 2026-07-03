@@ -9,6 +9,8 @@ import { API_BASE_URL } from "../../../lib/api";
 const TERMINAL_STATUSES: MeetingSummary["status"][] = [
   "meeting_ended",
   "processing",
+  "processing_final_analysis",
+  "synced_to_hubspot",
   "completed",
   "failed",
 ];

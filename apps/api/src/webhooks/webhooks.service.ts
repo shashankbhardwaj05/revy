@@ -53,11 +53,19 @@ export class WebhooksService {
     this.logger.warn(`Ignoring unrecognized Recall event: ${JSON.stringify(payload).slice(0, 200)}`);
   }
 
+  private async findSessionByBotId(botId: string) {
+    const recallBot = await this.prisma.recallBot.findUnique({
+      where: { recallBotId: botId },
+      include: { captureSession: { include: { meetingSession: true } } },
+    });
+    return recallBot?.captureSession.meetingSession;
+  }
+
   private async handleTranscriptData(payload: RecallTranscriptDataEvent): Promise<void> {
     const { bot, data } = payload.data;
-    const meeting = await this.prisma.meeting.findFirst({ where: { recallBotId: bot.id } });
-    if (!meeting) {
-      this.logger.warn(`No meeting found for Recall bot ${bot.id}`);
+    const session = await this.findSessionByBotId(bot.id);
+    if (!session) {
+      this.logger.warn(`No meeting session found for Recall bot ${bot.id}`);
       return;
     }
     if (data.words.length === 0) return;
@@ -68,11 +76,11 @@ export class WebhooksService {
     const speaker = data.participant.name ?? `Participant ${data.participant.id}`;
 
     await this.prisma.transcriptUtterance.create({
-      data: { meetingId: meeting.id, speaker, text, startedMs, endedMs, isFinal: true },
+      data: { meetingSessionId: session.id, speaker, text, startedMs, endedMs, isFinal: true },
     });
 
-    if (!TERMINAL_STATUSES.includes(meeting.status as MeetingStatus)) {
-      await this.prisma.meeting.update({ where: { id: meeting.id }, data: { status: "transcribing" } });
+    if (!TERMINAL_STATUSES.includes(session.status as MeetingStatus)) {
+      await this.prisma.meetingSession.update({ where: { id: session.id }, data: { status: "transcribing" } });
     }
   }
 
@@ -80,16 +88,15 @@ export class WebhooksService {
     const nextStatus = STATUS_EVENT_MAP[payload.event];
     if (!nextStatus) return;
 
-    const bot = payload.data.bot;
-    const meeting = await this.prisma.meeting.findFirst({ where: { recallBotId: bot.id } });
-    if (!meeting) {
-      this.logger.warn(`No meeting found for Recall bot ${bot.id}`);
+    const session = await this.findSessionByBotId(payload.data.bot.id);
+    if (!session) {
+      this.logger.warn(`No meeting session found for Recall bot ${payload.data.bot.id}`);
       return;
     }
-    if (TERMINAL_STATUSES.includes(meeting.status as MeetingStatus) && nextStatus !== "failed") return;
+    if (TERMINAL_STATUSES.includes(session.status as MeetingStatus) && nextStatus !== "failed") return;
 
-    await this.prisma.meeting.update({
-      where: { id: meeting.id },
+    await this.prisma.meetingSession.update({
+      where: { id: session.id },
       data: {
         status: nextStatus,
         endedAt: nextStatus === "meeting_ended" ? new Date() : undefined,
