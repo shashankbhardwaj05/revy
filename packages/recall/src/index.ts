@@ -43,8 +43,27 @@ export interface CreateBotParams {
   cameraImageBase64Jpeg?: string;
 }
 
-/** Raw bot object as returned by Recall — stored verbatim, never consumed downstream. */
+/** Raw bot object as returned by Recall — mostly stored verbatim; `getFinalTranscript`
+    below reads a few nested fields off it once the call has ended. */
 export type RecallBot = Record<string, unknown> & { id: string };
+
+interface RecallTranscriptWord {
+  text: string;
+  start_timestamp?: { relative: number } | null;
+  end_timestamp?: { relative: number } | null;
+}
+
+interface RecallTranscriptParticipantEntry {
+  participant: { id: number; name: string | null };
+  words: RecallTranscriptWord[];
+}
+
+export interface FinalTranscriptUtterance {
+  speaker: string;
+  text: string;
+  startedMs: number | null;
+  endedMs: number | null;
+}
 
 export class RecallApiError extends Error {
   constructor(
@@ -127,6 +146,72 @@ export class RecallClient {
   async removeBotFromCall(botId: string): Promise<void> {
     await this.request("POST", `/bot/${botId}/leave_call`);
   }
+
+  /**
+   * Fetches the bot's finished, async transcript once the call has ended — the same
+   * data the real-time `transcript.data` webhook is supposed to stream incrementally,
+   * but as one full download. This is the reliable path when running the
+   * `recallai_streaming` provider in `prioritize_accuracy` mode: that mode uses async,
+   * non-real-time models, so the live webhook can arrive very late or not at all (see
+   * docs/runbooks/webhook-debugging.md), while this async transcript is always complete
+   * once Recall finishes processing (`media_shortcuts.transcript.status.code === "done"`).
+   * Returns `undefined` if the transcript isn't ready yet or the bot has none (e.g. no one
+   * spoke) — never throws for "not ready", only for actual request failures.
+   */
+  async getFinalTranscript(botId: string): Promise<FinalTranscriptUtterance[] | undefined> {
+    const bot = (await this.getBot(botId)) as {
+      recordings?: Array<{ media_shortcuts?: { transcript?: { status?: { code?: string }; data?: { download_url?: string } } } }>;
+    };
+    const transcript = bot.recordings?.[0]?.media_shortcuts?.transcript;
+    if (transcript?.status?.code !== "done") return undefined;
+    const downloadUrl = transcript.data?.download_url;
+    if (!downloadUrl) return undefined;
+
+    const res = await fetch(downloadUrl);
+    if (!res.ok) throw new RecallApiError(res.status, await res.text());
+    const entries = (await res.json()) as RecallTranscriptParticipantEntry[];
+
+    return entries.flatMap((entry) => {
+      const speaker = entry.participant.name ?? `Participant ${entry.participant.id}`;
+      return groupWordsIntoUtterances(entry.words).map((u) => ({ speaker, ...u }));
+    });
+  }
+}
+
+/**
+ * Recall's async transcript is one entry per participant with a flat word list, not
+ * pre-split into utterances — group consecutive words into one utterance whenever the
+ * gap between them exceeds `gapThresholdSeconds` (mirrors how live delivery would have
+ * chunked it; 1.2s is the heuristic already used for manual recovery, see
+ * docs/runbooks/webhook-debugging.md).
+ */
+function groupWordsIntoUtterances(
+  words: RecallTranscriptWord[],
+  gapThresholdSeconds = 1.2,
+): Array<{ text: string; startedMs: number | null; endedMs: number | null }> {
+  const groups: RecallTranscriptWord[][] = [];
+  let current: RecallTranscriptWord[] = [];
+
+  for (const word of words) {
+    const prevEnd = current[current.length - 1]?.end_timestamp?.relative;
+    const curStart = word.start_timestamp?.relative;
+    if (current.length > 0 && prevEnd != null && curStart != null && curStart - prevEnd > gapThresholdSeconds) {
+      groups.push(current);
+      current = [];
+    }
+    current.push(word);
+  }
+  if (current.length > 0) groups.push(current);
+
+  return groups.map((group) => ({
+    text: group.map((w) => w.text).join(" "),
+    startedMs: toMs(group[0].start_timestamp),
+    endedMs: toMs(group[group.length - 1].end_timestamp),
+  }));
+}
+
+function toMs(ts?: { relative: number } | null): number | null {
+  return ts ? Math.round(ts.relative * 1000) : null;
 }
 
 /**

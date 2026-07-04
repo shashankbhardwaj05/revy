@@ -1,6 +1,8 @@
 import { Injectable, Logger } from "@nestjs/common";
+import { loadEnv } from "@notetaker/config";
 import type { MeetingStatus } from "@notetaker/contracts";
 import { getPrisma, Prisma } from "@notetaker/db";
+import { RecallClient } from "@notetaker/recall";
 
 interface RecallWord {
   text: string;
@@ -77,6 +79,12 @@ export class WebhooksService {
   private readonly logger = new Logger(WebhooksService.name);
   private readonly prisma = getPrisma();
 
+  private recallClient(): RecallClient | undefined {
+    const env = loadEnv();
+    if (!env.RECALL_API_KEY) return undefined;
+    return new RecallClient({ apiKey: env.RECALL_API_KEY, region: env.RECALL_REGION });
+  }
+
   async handleRecallEvent(payload: unknown, webhookId: string): Promise<void> {
     if (isTranscriptDataEvent(payload)) return this.handleTranscriptData(payload, webhookId);
     if (isBotStatusEvent(payload)) return this.handleBotStatus(payload);
@@ -151,6 +159,48 @@ export class WebhooksService {
         endedAt: nextStatus === "meeting_ended" ? new Date() : undefined,
       },
     });
+
+    if (nextStatus === "completed") {
+      // Best-effort — the bot-status transition above is the important part of this
+      // webhook and must not fail because of a transcript-fetch problem. Runs at most
+      // once per session: isForwardTransition already guarantees "completed" is only
+      // reached once, so this can't double-fetch on a redelivered bot.done event.
+      await this.backfillFinalTranscript(session.id, payload.data.bot.id).catch((err) => {
+        this.logger.error(`Failed to backfill final transcript for bot ${payload.data.bot.id}: ${String(err)}`);
+      });
+    }
+  }
+
+  /**
+   * `recallai_streaming` in `prioritize_accuracy` mode uses async, non-real-time models —
+   * the live `transcript.data` webhook can arrive very late or not at all (see
+   * docs/runbooks/webhook-debugging.md). Once the bot is fully done, fetch Recall's
+   * complete async transcript directly instead of relying on it ever having streamed
+   * live. Replaces (not appends to) any utterances already in place, since the async
+   * transcript is the authoritative, complete version regardless of what partial live
+   * data may have already arrived.
+   */
+  private async backfillFinalTranscript(sessionId: string, botId: string): Promise<void> {
+    const recall = this.recallClient();
+    if (!recall) return;
+
+    const utterances = await recall.getFinalTranscript(botId);
+    if (!utterances || utterances.length === 0) return;
+
+    await this.prisma.$transaction([
+      this.prisma.transcriptUtterance.deleteMany({ where: { meetingSessionId: sessionId } }),
+      this.prisma.transcriptUtterance.createMany({
+        data: utterances.map((u) => ({
+          meetingSessionId: sessionId,
+          speaker: u.speaker,
+          text: u.text,
+          startedMs: u.startedMs,
+          endedMs: u.endedMs,
+          isFinal: true,
+        })),
+      }),
+    ]);
+    this.logger.log(`Backfilled ${utterances.length} utterance(s) for session ${sessionId} from Recall's async transcript`);
   }
 }
 

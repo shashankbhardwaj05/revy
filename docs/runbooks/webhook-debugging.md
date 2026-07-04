@@ -69,6 +69,36 @@ bot in the account. If that page has no webhook URL configured, or points at the
 URL, status will never advance past whatever the last real event was, even if the
 transcript webhook works fine.
 
+## Symptom: transcript box stays empty during and after the call, even though status reaches `completed` (fixed 2026-07-04)
+
+**This is not a webhook delivery bug — it's a real limitation of `prioritize_accuracy`
+transcription mode.** That mode (which this project deliberately stays on, trading speed
+for accuracy — see the mode-comparison discussion in git history / Orchestration.md)
+runs on async, non-real-time models. Confirmed by direct investigation: a test call's bot
+status correctly progressed all the way to `completed` (proving webhooks, signature
+verification, and dedup were all working), but zero `transcript.data` webhook events ever
+arrived — not delayed, not rejected, just never sent. Recall's own async transcript for
+the same bot, fetched directly via `GET /bot/{id}/`, contained the full correct
+transcript the whole time; it just was never pushed live.
+
+**Fix:** `WebhooksService.handleBotStatus` now calls `RecallClient.getFinalTranscript()`
+(in `packages/recall/src/index.ts`) automatically the moment a session reaches
+`completed`, downloading and grouping Recall's complete async transcript and replacing
+whatever utterances (if any) had already been inserted from live `transcript.data`
+events. This means: **no live word-by-word view during the call** (that would require
+`prioritize_low_latency` mode instead, see the mode tradeoff discussion), but the full,
+accurate transcript reliably appears once the call ends — automatically, no manual
+recovery needed anymore for this specific case.
+
+If a transcript still doesn't appear after a meeting reaches `completed` post-2026-07-04,
+check: (1) is `RECALL_API_KEY` set on `api` (the backfill silently no-ops without it,
+same as bot creation), (2) does `GET /bot/{id}/` show
+`recordings[0].media_shortcuts.transcript.status.code === "done"` — if it's still
+`processing`, Recall itself hasn't finished transcribing yet, wait and check again (this
+is independent of our code), (3) check `api` logs for
+`Failed to backfill final transcript for bot ...` — the backfill is best-effort and won't
+crash the webhook handler, but does log on failure.
+
 ## Symptom: meeting stuck at `meeting_ended`, never reaches `completed` (fixed 2026-07-04)
 
 This was a real bug, not a config issue: `webhooks.service.ts`'s status guard used to

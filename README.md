@@ -22,15 +22,26 @@
 
 - Paste a Google Meet link → a real Recall.ai bot joins the call (branded as **Revy
   Notetaker**, BEAM logo as its camera tile).
-- The transcript streams into the web app **live**, speaker-attributed, as the meeting
-  happens — verified end-to-end on the hosted deployment, not just locally.
-- When the meeting ends, the transcript is saved — every past meeting stays in your
-  library, accessible any time.
+- The transcript is saved automatically once the meeting ends — every past meeting stays
+  in your library, accessible any time, speaker-attributed. **Not live** (see below) —
+  the full transcript appears once the call is over, not word-by-word during it.
 - Deployed and publicly reachable on Railway (`api` + `web` services), backed by the full
   data model (orgs, users, playbooks, segments, sync jobs — see Milestones below).
 - A meeting's status correctly advances all the way to `completed` once the call ends —
   fixed 2026-07-04 (see Security & Reliability below); previously every meeting silently
   got stuck at `meeting_ended` and never finished.
+
+**On "live" transcription (corrected 2026-07-04):** this project intentionally runs
+Recall's `recallai_streaming` provider in `prioritize_accuracy` mode — better
+transcription quality, at the cost of using async, non-real-time models under the hood.
+In practice this means the live `transcript.data` webhook that would stream text
+word-by-word during the call is unreliable — confirmed by testing, it can simply never
+arrive for a call, even though Recall transcribes the audio correctly. Rather than
+switch to `prioritize_low_latency` (real-time, but English-only and no profanity filter —
+a real tradeoff, not free), the API now automatically fetches Recall's complete async
+transcript the moment a call ends and saves it then. You get the full, accurate
+transcript reliably after the call — not a live view during it. Genuine real-time
+word-by-word display would require accepting the low-latency mode's tradeoffs.
 
 That's it, deliberately — no playbooks UI, segment detection, Chrome extension, or CRM
 sync yet. The tables for those exist (M3, done), but the logic that populates and reads
@@ -55,6 +66,12 @@ deployed the same night:
 - Plus: the meeting detail page's live-polling loop no longer permanently stops after a
   single transient network error, and a misconfigured deploy (API key set, webhook secret
   not) now fails loudly instead of silently stranding every meeting.
+
+A follow-up found via live testing the same night: **automatic post-call transcript
+backfill** — since the live `transcript.data` webhook is unreliable in
+`prioritize_accuracy` mode (see "On live transcription" above), the API now fetches
+Recall's complete async transcript the moment a call reaches `completed` and saves it,
+instead of relying on whatever (if anything) streamed in live.
 
 Every API endpoint is still fully open/unauthenticated — a known, intentional V1 scope
 decision (see Orchestration.md §12), not something this pass changed. Full detail on
@@ -104,8 +121,9 @@ CRM sync layers that don't exist yet).
 │   Browser    │ ────────────────────────▶ │  apps/web (Railway)   │
 │              │                            │  Next.js              │
 │              │ ◀──────────────────────── │  paste form, library,  │
-└─────────────┘   5. poll every ~2s for     │  live transcript view  │
-                   meeting + transcript      └───────────┬───────────┘
+└─────────────┘   5. poll every ~2s for     │  status + transcript   │
+                   meeting + transcript      │  view                  │
+                                             └───────────┬───────────┘
                                                           │ 2. POST /meetings
                                                           ▼
                                              ┌───────────────────────┐
@@ -113,10 +131,12 @@ CRM sync layers that don't exist yet).
                                     │        │  NestJS                │
                                     │        │  meetings API +        │
                         4. webhooks │        │  webhook receiver      │
-                   (transcript.data,│        └───────────┬───────────┘
-                    bot status —    │        3. create bot│  4b. write meeting +
-                    HMAC verified)  │        (REST call)  │      transcript rows
-                                    │                     ▼            ▼
+                   (bot status live;│        └───────────┬───────────┘
+                 transcript.data    │        3. create bot│  4b. write status;
+                 unreliable, see    │        (REST call)  │      4c. on `completed`,
+                 README below —     │                     │      fetch full async
+                 HMAC + timestamp   │                     │      transcript instead
+                 verified)          │                     ▼            ▼
                           ┌─────────┴──────┐   ┌───────────────────────┐
                           │   Recall.ai     │   │   Supabase Postgres    │
                           │  joins the Meet,│   │  single source of      │
@@ -128,14 +148,19 @@ CRM sync layers that don't exist yet).
 
 Steps, in order: (1) you paste a link, (2) the browser POSTs it to the API, (3) the API
 asks Recall to create a bot, which creates a `Meeting` + `MeetingSession` +
-`CaptureSession` + `RecallBot` row, (4) as the meeting happens Recall sends webhooks back
-to the API — verified with an HMAC signature — resolved to the right session via the
-`RecallBot` → `CaptureSession` → `MeetingSession` chain and written straight to Supabase
-(no queue yet, that's M4), (5) the browser polls the API every ~2 seconds and renders
-whatever's in the database. No WebSockets, no BullMQ, no Redis in this version —
-deliberately lean, upgraded later per the roadmap. The full data model (playbooks,
-segments, HubSpot sync tables, etc.) exists as of M3 but most of it is unpopulated until
-M4 onward builds the logic that reads/writes it — see `Orchestration.md` §6 and §17.
+`CaptureSession` + `RecallBot` row, (4) as the meeting happens Recall sends bot-status
+webhooks back to the API reliably (joining → recording → ended → etc.) — verified with an
+HMAC signature + timestamp freshness check, resolved to the right session via the
+`RecallBot` → `CaptureSession` → `MeetingSession` chain — but the transcript-content
+webhook (`transcript.data`) is unreliable in the accuracy-first transcription mode this
+project uses (see "On live transcription" above), so once status reaches `completed` the
+API instead fetches Recall's complete async transcript directly and saves that, (5) the
+browser polls the API every ~2 seconds and renders whatever's in the database — so the
+transcript appears once the call ends, not word-by-word live. No WebSockets, no BullMQ,
+no Redis in this version — deliberately lean, upgraded later per the roadmap. The full
+data model (playbooks, segments, HubSpot sync tables, etc.) exists as of M3 but most of
+it is unpopulated until M4 onward builds the logic that reads/writes it — see
+`Orchestration.md` §6 and §17.
 
 ## Costs
 

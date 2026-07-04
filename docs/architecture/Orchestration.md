@@ -114,15 +114,24 @@ what's live in `apps/web` today.
 
 ### Functional capability
 - ✅ Paste a Meet URL → row persisted in Supabase → shows in a library UI (hosted, works)
-- ✅ Real Recall bot joins, records, and transcribes live — confirmed end-to-end against
-  real Google Meet calls, hosted, including a fresh smoke test after tonight's fixes
+- ✅ Real Recall bot joins, records, and transcribes — confirmed end-to-end against real
+  Google Meet calls, hosted. **Correction (2026-07-04):** live, word-by-word transcript
+  during the call is NOT reliable while on `prioritize_accuracy` mode — that mode uses
+  async, non-real-time models, and the live `transcript.data` webhook can arrive very
+  late or not at all (confirmed: a real test call reached `completed` with zero
+  `transcript.data` events ever received, while Recall's own async transcript had the
+  full correct text the whole time). `prioritize_low_latency` would fix this but requires
+  English-only and drops profanity-filter support — deliberately not switched, see below.
 - ✅ Webhook receiver: signature-verified, replay-protected, idempotent against Recall's
   at-least-once redelivery, and correctly advances a meeting's status **all the way to
-  `completed`** — a real bug found tonight (see below) previously stranded every meeting
-  at `meeting_ended` forever
-- ✅ Manual recovery path exists (pull a finished bot's transcript directly from Recall's
-  async retrieval API) — see `docs/runbooks/webhook-debugging.md`. Not yet a scripted tool,
-  and less likely to be needed now that the status-progression bug is fixed
+  `completed`** — a real bug found 2026-07-04 (see below) previously stranded every
+  meeting at `meeting_ended` forever
+- ✅ **Automatic post-call transcript backfill (2026-07-04):** the moment a session
+  reaches `completed`, `WebhooksService` fetches Recall's complete async transcript
+  (`RecallClient.getFinalTranscript()`) and replaces whatever partial/empty transcript
+  state existed — this is what makes accuracy-mode transcripts actually show up reliably,
+  compensating for the live-webhook unreliability above. Manual recovery via
+  `docs/runbooks/webhook-debugging.md` should rarely be needed now.
 - ⬜ Segment detection engine
 - ⬜ Chrome extension of any kind
 - ⬜ Playbooks (editable checklists) — tables exist (M3), no CRUD UI or detection logic yet
@@ -171,6 +180,15 @@ fixed and deployed the same night:
 10. **`processing` vs `processing_final_analysis` naming collision** — clarified via
     comments (no schema change); still worth real disambiguation once M4/M7 build the
     finalization job that will actually use the second one.
+
+**11. Found via live testing after deploying the above (2026-07-04, same night):** a user
+test showed the transcript box staying empty for an entire call despite status correctly
+reaching `completed`. Root-caused to `prioritize_accuracy` mode's real-time webhook being
+unreliable (see "Functional capability" above) — not a regression from fixes 1-10 (bot
+status webhooks were proven working since status correctly advanced). Fixed by adding
+automatic post-call async-transcript backfill (`RecallClient.getFinalTranscript` +
+`WebhooksService.backfillFinalTranscript`), and used the same mechanism to manually
+recover the affected test meeting's real transcript.
 
 ### Process
 - 🚧 Git branching strategy — mixed tonight: M3 went through a proper
