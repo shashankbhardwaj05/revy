@@ -28,11 +28,37 @@
   library, accessible any time.
 - Deployed and publicly reachable on Railway (`api` + `web` services), backed by the full
   data model (orgs, users, playbooks, segments, sync jobs — see Milestones below).
+- A meeting's status correctly advances all the way to `completed` once the call ends —
+  fixed 2026-07-04 (see Security & Reliability below); previously every meeting silently
+  got stuck at `meeting_ended` and never finished.
 
 That's it, deliberately — no playbooks UI, segment detection, Chrome extension, or CRM
 sync yet. The tables for those exist (M3, done), but the logic that populates and reads
 them doesn't (M4 onward). Those are real, planned, and documented (see below), just not
 built.
+
+## Security & Reliability
+
+A full whole-codebase bug + security review (2026-07-04) found and fixed 10 issues,
+deployed the same night:
+
+- **Meeting URL validation** now checks the real hostname, not a substring — a crafted
+  URL could previously point our Recall bot at an attacker-controlled page.
+- **Webhook replay protection** — a captured, correctly-signed webhook request used to be
+  a forever-valid credential; now rejected outside a 5-minute freshness window.
+- **Webhook deduplication** — a redelivered `transcript.data` webhook (Recall uses
+  at-least-once delivery) used to insert duplicate transcript text; now a no-op.
+- **Atomic bot creation** — a partial failure after a real Recall bot was created used to
+  leave it running/billing with no local record and every webhook for it silently
+  dropped; DB writes now run in a single transaction, and the bot is stopped on failure.
+- **The status-progression bug** described above.
+- Plus: the meeting detail page's live-polling loop no longer permanently stops after a
+  single transient network error, and a misconfigured deploy (API key set, webhook secret
+  not) now fails loudly instead of silently stranding every meeting.
+
+Every API endpoint is still fully open/unauthenticated — a known, intentional V1 scope
+decision (see Orchestration.md §12), not something this pass changed. Full detail on
+every finding is in `docs/architecture/Orchestration.md` §1.
 
 ## Vision & orchestration
 
@@ -139,7 +165,9 @@ packages/
   config/    — environment loading/validation
   db/        — Prisma schema + client (Postgres, hosted on Supabase) — full M3 schema,
                ~22 entities: orgs/users/playbooks/segments/sync jobs, see schema.prisma
-  recall/    — typed Recall.ai client, webhook signature verification, bot branding asset
+  recall/    — typed Recall.ai client, webhook signature verification + replay protection,
+               bot branding asset, and the minimal CaptureProvider interface (Recall today,
+               swappable for a local/desktop capture provider later)
 docs/
   architecture/Orchestration.md — the plan (read this first)
   runbooks/local-dev.md         — local environment setup
@@ -204,7 +232,9 @@ Both `RECALL_WEBHOOK_SECRET` and `APP_BASE_URL` were the two real blockers that 
 hosted webhook pipeline non-functional for a while — see the "Historical incident" note in
 `docs/runbooks/webhook-debugging.md` for the full story if you ever see the same symptoms
 again (status stuck at `bot_joining`, or status advancing fine but no transcript ever
-appearing).
+appearing). As of 2026-07-04, the API also fails fast at bot-creation time if
+`RECALL_API_KEY` is set but `RECALL_WEBHOOK_SECRET` isn't, instead of silently stranding
+the meeting.
 
 ### Deployment gotchas learned the hard way
 

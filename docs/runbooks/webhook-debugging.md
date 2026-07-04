@@ -36,6 +36,12 @@ curl -s -w '\nHTTP %{http_code}\n' -X POST <api-url>/webhooks/recall \
   service has a public domain generated (not just an internal `.railway.internal` one).
 - **401 "Invalid webhook signature"** → the endpoint is configured but a real request
   failed verification. See §3 below.
+- **401 "Webhook timestamp is too old"** (added 2026-07-04) → the request had a valid
+  signature but its `Webhook-Timestamp` header was more than 5 minutes from the server's
+  clock (`isRecallWebhookTimestampFresh` in `packages/recall/src/index.ts`). This is
+  intentional replay protection, not a bug — a genuinely fresh webhook from Recall should
+  never hit this. If it does, check the API server's clock (NTP drift) before suspecting
+  the code.
 
 ### 2. Was the per-bot transcript webhook even configured for this bot?
 
@@ -62,6 +68,26 @@ in the Recall dashboard (`{region}.recall.ai/dashboard/webhooks/`) that applies 
 bot in the account. If that page has no webhook URL configured, or points at the wrong
 URL, status will never advance past whatever the last real event was, even if the
 transcript webhook works fine.
+
+## Symptom: meeting stuck at `meeting_ended`, never reaches `completed` (fixed 2026-07-04)
+
+This was a real bug, not a config issue: `webhooks.service.ts`'s status guard used to
+treat `meeting_ended` as a dead end, but Recall's real event order sends
+`bot.recording_done`/`bot.done` *after* `bot.call_ended` — so every meeting that finished
+normally got silently stuck. Fixed by replacing the flat terminal-status set with an
+explicit lifecycle-order check (`STATUS_ORDER`/`isForwardTransition`). If you see a
+meeting stuck at `meeting_ended` on a deploy that predates this fix, it's a code issue,
+not a webhook delivery issue — no amount of resending webhooks will fix it retroactively;
+backfill the status by hand (`processing` → `completed`) once the fix is deployed.
+
+## Duplicate transcript text after a slow response (fixed 2026-07-04)
+
+Recall uses at-least-once webhook delivery — if the API is slow to ACK a `transcript.data`
+event, Recall redelivers it. This used to insert the same text twice. `TranscriptUtterance`
+now has a unique `recallWebhookId` column; a redelivery hits a unique-constraint violation
+(Prisma error `P2002`), which `handleTranscriptData` catches and treats as a no-op (logged
+as a warning, not an error). If you see duplicate text in an *old* meeting's transcript
+from before this fix, that's expected — there's no automatic backfill/cleanup for it.
 
 ## Recovering a finished meeting's transcript manually
 
